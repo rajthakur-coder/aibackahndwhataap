@@ -488,14 +488,15 @@ async def scrape(data: ScrapeRequest, db: Session = Depends(get_db)):
         db.add(row)
         db.commit()
         db.refresh(row)
-        chunk_count = save_scraped_chunks(db, row)
+        rag_result = save_scraped_chunks(db, row)
 
         return {
             "status": "success",
             "id": row.id,
             "url": row.url,
             "content_length": len(row.content),
-            "chunk_count": chunk_count,
+            "chunk_count": rag_result["chunks"],
+            "pinecone_upserted": rag_result["pinecone_upserted"],
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -522,17 +523,23 @@ def rebuild_rag_index(db: Session = Depends(get_db)):
     rows = db.query(ScrapedData).order_by(ScrapedData.created_at.asc()).all()
     documents = db.query(KnowledgeDocument).order_by(KnowledgeDocument.created_at.asc()).all()
     total_chunks = 0
+    pinecone_upserted = 0
 
     for row in rows:
-        total_chunks += save_scraped_chunks(db, row)
+        result = save_scraped_chunks(db, row)
+        total_chunks += result["chunks"]
+        pinecone_upserted += result["pinecone_upserted"]
     for document in documents:
-        total_chunks += save_knowledge_chunks(db, document)
+        result = save_knowledge_chunks(db, document)
+        total_chunks += result["chunks"]
+        pinecone_upserted += result["pinecone_upserted"]
 
     return {
         "status": "success",
         "scraped_documents": len(rows),
         "knowledge_documents": len(documents),
         "chunks": total_chunks,
+        "pinecone_upserted": pinecone_upserted,
     }
 
 

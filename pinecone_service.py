@@ -8,7 +8,7 @@ from openai import OpenAI
 
 DEFAULT_NAMESPACE = "default"
 DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
-DEFAULT_GEMINI_EMBEDDING_MODEL = "text-embedding-004"
+DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001"
 DEFAULT_OPENAI_EMBEDDING_DIMENSION = 1536
 DEFAULT_GEMINI_EMBEDDING_DIMENSION = 768
 
@@ -125,31 +125,55 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 def _embed_texts_with_gemini(texts: list[str]) -> list[list[float]]:
     model = _embedding_model()
     model_path = model if model.startswith("models/") else f"models/{model}"
-    response = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/{model_path}:batchEmbedContents",
-        params={"key": os.getenv("GEMINI_API_KEY")},
-        json={
-            "requests": [
-                {
-                    "model": model_path,
-                    "content": {"parts": [{"text": text}]},
-                }
-                for text in texts
-            ]
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return [item["values"] for item in data.get("embeddings", [])]
+    embeddings = []
+
+    for text in texts:
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/{model_path}:embedContent",
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": os.getenv("GEMINI_API_KEY") or "",
+            },
+            json={
+                "model": model_path,
+                "content": {"parts": [{"text": text}]},
+                "outputDimensionality": _embedding_dimension(),
+            },
+            timeout=30,
+        )
+        if not response.ok:
+            raise RuntimeError(
+                "Gemini embedding request failed: "
+                f"status={response.status_code}, model={model_path}, body={response.text[:500]}"
+            )
+
+        data = response.json()
+        embeddings.append(data["embedding"]["values"])
+
+    return embeddings
 
 
 def upsert_chunks(chunks: list[dict]) -> int:
-    if not chunks or not ensure_index():
+    print(f"PINECONE UPSERT CALLED: chunks={len(chunks)}")
+    if not chunks:
+        print("PINECONE UPSERT SKIPPED: no chunks")
+        return 0
+
+    if not ensure_index():
+        print("PINECONE UPSERT SKIPPED: pinecone is not configured/ready")
         return 0
 
     vectors = []
     embeddings = embed_texts([chunk["content"] for chunk in chunks])
+    if embeddings:
+        print(
+            "PINECONE EMBEDDING:",
+            f"provider={_embedding_provider()}",
+            f"model={_embedding_model()}",
+            f"size={len(embeddings[0])}",
+            f"expected_dimension={_embedding_dimension()}",
+        )
+
     for chunk, embedding in zip(chunks, embeddings):
         metadata = {
             "source_type": chunk["source_type"],
@@ -167,7 +191,8 @@ def upsert_chunks(chunks: list[dict]) -> int:
             }
         )
 
-    _index().upsert(vectors=vectors, namespace=_namespace())
+    response = _index().upsert(vectors=vectors, namespace=_namespace())
+    print(f"PINECONE UPSERT SAVED: vectors={len(vectors)} namespace={_namespace()} response={response}")
     return len(vectors)
 
 

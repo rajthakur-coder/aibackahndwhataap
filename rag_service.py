@@ -118,7 +118,7 @@ def chunk_text(content: str) -> list[str]:
     return chunks
 
 
-def save_scraped_chunks(db: Session, scraped_data: ScrapedData) -> int:
+def save_scraped_chunks(db: Session, scraped_data: ScrapedData) -> dict:
     db.query(ScrapedChunk).filter(
         ScrapedChunk.scraped_data_id == scraped_data.id,
     ).delete()
@@ -135,8 +135,11 @@ def save_scraped_chunks(db: Session, scraped_data: ScrapedData) -> int:
         )
 
     db.commit()
-    _upsert_scraped_chunks_to_pinecone(scraped_data, chunks)
-    return len(chunks)
+    pinecone_upserted = _upsert_scraped_chunks_to_pinecone(scraped_data, chunks)
+    return {
+        "chunks": len(chunks),
+        "pinecone_upserted": pinecone_upserted,
+    }
 
 
 def save_knowledge_document(
@@ -158,7 +161,7 @@ def save_knowledge_document(
     return document
 
 
-def save_knowledge_chunks(db: Session, document: KnowledgeDocument) -> int:
+def save_knowledge_chunks(db: Session, document: KnowledgeDocument) -> dict:
     db.query(KnowledgeChunk).filter(
         KnowledgeChunk.document_id == document.id,
     ).delete()
@@ -177,8 +180,11 @@ def save_knowledge_chunks(db: Session, document: KnowledgeDocument) -> int:
         )
 
     db.commit()
-    _upsert_knowledge_chunks_to_pinecone(document, chunks)
-    return len(chunks)
+    pinecone_upserted = _upsert_knowledge_chunks_to_pinecone(document, chunks)
+    return {
+        "chunks": len(chunks),
+        "pinecone_upserted": pinecone_upserted,
+    }
 
 
 def _upsert_scraped_chunks_to_pinecone(scraped_data: ScrapedData, chunks: list[str]) -> int:
