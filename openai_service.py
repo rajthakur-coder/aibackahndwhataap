@@ -4,11 +4,11 @@ import requests
 from sqlalchemy.orm import Session
 
 from models import Message, ScrapedData
+from rag_service import retrieve_relevant_context
 
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = 45
-MAX_CONTEXT_CHARS = 6000
 MAX_REPLY_CHARS = 4096
 
 
@@ -28,7 +28,7 @@ def _recent_conversation(db: Session, phone: str) -> list[dict]:
     return history
 
 
-def _scraped_context(db: Session) -> str:
+def _latest_scraped_context(db: Session) -> str:
     rows = (
         db.query(ScrapedData)
         .order_by(ScrapedData.created_at.desc())
@@ -41,25 +41,39 @@ def _scraped_context(db: Session) -> str:
         content = row.content[:2000]
         sections.append(f"Source: {row.url}\n{content}")
 
-    return "\n\n".join(sections)[:MAX_CONTEXT_CHARS]
+    return "\n\n".join(sections)[:6000]
 
 
-def generate_ai_reply(db: Session, phone: str, user_message: str) -> str:
+def generate_ai_reply(
+    db: Session,
+    phone: str,
+    user_message: str,
+    agent_context: str = "",
+) -> str:
     api_key = os.getenv("OPENROUTER_API_KEY")
     model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o")
 
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is not configured")
 
-    context = _scraped_context(db)
+    context = retrieve_relevant_context(db, user_message)
+    if not context:
+        context = _latest_scraped_context(db)
+
     system_prompt = (
-        "You are a helpful WhatsApp assistant. Reply clearly and briefly. "
-        "Use the provided website context when it is relevant, and do not "
-        "invent details when the answer is not in the context."
+        "You are an advanced WhatsApp AI agent. Reply clearly and briefly. "
+        "Use the provided retrieved website context when it is relevant. "
+        "Use customer memory and intent context to personalize the response. "
+        "Ask for missing details when an action needs more information. "
+        "If the answer is not available in the context, say that you do not "
+        "have that information instead of inventing details."
     )
 
+    if agent_context:
+        system_prompt += f"\n\nCustomer and agent context:\n{agent_context}"
+
     if context:
-        system_prompt += f"\n\nWebsite context:\n{context}"
+        system_prompt += f"\n\nRetrieved website context:\n{context}"
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(_recent_conversation(db, phone))

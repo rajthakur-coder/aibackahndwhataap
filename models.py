@@ -15,6 +15,22 @@ class Message(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class WebhookEvent(Base):
+    __tablename__ = "webhook_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider = Column(String, default="whatsapp", index=True)
+    external_id = Column(String, unique=True, index=True, nullable=True)
+    phone = Column(String, index=True, nullable=True)
+    message_text = Column(Text, nullable=True)
+    payload = Column(Text, nullable=True)
+    status = Column(String, default="pending", index=True)
+    attempts = Column(Integer, default=0)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)
+
+
 class Contact(Base):
     __tablename__ = "contacts"
 
@@ -29,4 +45,167 @@ class ScrapedData(Base):
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String, nullable=False, index=True)
     content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ScrapedChunk(Base):
+    __tablename__ = "scraped_chunks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scraped_data_id = Column(Integer, nullable=False, index=True)
+    url = Column(String, nullable=False, index=True)
+    chunk_index = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CustomerProfile(Base):
+    __tablename__ = "customer_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    intent = Column(String, nullable=True)
+    status = Column(String, default="active")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CustomerMemory(Base):
+    __tablename__ = "customer_memories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone = Column(String, index=True, nullable=False)
+    memory_type = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Lead(Base):
+    __tablename__ = "leads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone = Column(String, index=True, nullable=False)
+    name = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    intent = Column(String, nullable=True)
+    status = Column(String, default="new")
+    source = Column(String, default="whatsapp")
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Appointment(Base):
+    __tablename__ = "appointments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone = Column(String, index=True, nullable=False)
+    customer_name = Column(String, nullable=True)
+    requested_time = Column(String, nullable=True)
+    status = Column(String, default="requested")
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class OrderStatus(Base):
+    __tablename__ = "order_statuses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone = Column(String, index=True, nullable=True)
+    order_id = Column(String, unique=True, index=True, nullable=False)
+    status = Column(String, default="received")
+    details = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EcommerceConnection(Base):
+    __tablename__ = "ecommerce_connections"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    platform = Column(String, index=True, nullable=False)
+    store_url = Column(String, nullable=False)
+    access_token = Column(Text, nullable=True)
+    consumer_key = Column(Text, nullable=True)
+    consumer_secret = Column(Text, nullable=True)
+    status = Column(String, default="active")
+    last_sync_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EcommerceOrder(Base):
+    __tablename__ = "ecommerce_orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    connection_id = Column(Integer, index=True, nullable=False)
+    platform = Column(String, index=True, nullable=False)
+    external_id = Column(String, index=True, nullable=False)
+    order_number = Column(String, index=True, nullable=False)
+    phone = Column(String, index=True, nullable=True)
+    email = Column(String, index=True, nullable=True)
+    customer_name = Column(String, nullable=True)
+    status = Column(String, index=True, nullable=True)
+    fulfillment_status = Column(String, index=True, nullable=True)
+    financial_status = Column(String, nullable=True)
+    total = Column(String, nullable=True)
+    currency = Column(String, nullable=True)
+    tracking_number = Column(String, nullable=True)
+    tracking_url = Column(Text, nullable=True)
+    items = Column(Text, nullable=True)
+    raw_payload = Column(Text, nullable=True)
+    delivered_message_sent_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class HandoffTicket(Base):
+    __tablename__ = "handoff_tickets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone = Column(String, index=True, nullable=False)
+    reason = Column(String, nullable=True)
+    status = Column(String, default="open")
+    summary = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AgentAction(Base):
+    __tablename__ = "agent_actions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone = Column(String, index=True, nullable=True)
+    action_type = Column(String, index=True, nullable=False)
+    status = Column(String, default="logged")
+    payload = Column(Text, nullable=True)
+    result = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class KnowledgeDocument(Base):
+    __tablename__ = "knowledge_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, nullable=False)
+    source = Column(String, nullable=True, index=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class KnowledgeChunk(Base):
+    __tablename__ = "knowledge_chunks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, nullable=False, index=True)
+    title = Column(String, nullable=False)
+    source = Column(String, nullable=True, index=True)
+    chunk_index = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    embedding = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
