@@ -106,6 +106,7 @@ REQUEST_ACTION_TERMS = {
     "send",
     "show",
 }
+IMAGE_URL_RE = re.compile(r"https?://[^\s,]+")
 
 
 def _tokens(text: str) -> list[str]:
@@ -339,6 +340,26 @@ def _product_caption(product: EcommerceProduct) -> str:
     return "\n".join(caption_parts)
 
 
+def _scraped_image_urls(content: str) -> list[str]:
+    match = re.search(r"^Images:\s*(.+)$", content or "", flags=re.MULTILINE)
+    if not match:
+        return []
+
+    urls = []
+    for raw_url in IMAGE_URL_RE.findall(match.group(1)):
+        url = raw_url.rstrip(").]")
+        if url.startswith("http"):
+            urls.append(url)
+    return list(dict.fromkeys(urls))
+
+
+def _scraped_title(content: str, fallback: str) -> str:
+    match = re.search(r"^Page title:\s*(.+)$", content or "", flags=re.MULTILINE)
+    if match and match.group(1).strip():
+        return match.group(1).strip()
+    return fallback
+
+
 def find_relevant_catalog_products(db: Session, query: str, limit: int = 5) -> list[dict]:
     if not is_catalog_request(query):
         return []
@@ -418,6 +439,61 @@ def find_relevant_product_image(db: Session, query: str) -> dict | None:
         "image_url": image_url,
         "caption": _product_caption(best_product),
     }
+
+
+def find_relevant_website_images(db: Session, query: str, limit: int = 3) -> list[dict]:
+    if not is_image_request(query):
+        return []
+
+    query_terms = Counter(_tokens(query))
+    rows = db.query(ScrapedData).order_by(ScrapedData.created_at.desc()).limit(100).all()
+    scored = []
+    for row in rows:
+        image_urls = _scraped_image_urls(row.content)
+        if not image_urls:
+            continue
+        score = _score_chunk(
+            query_terms,
+            ScrapedChunk(
+                scraped_data_id=row.id,
+                url=row.url,
+                chunk_index=0,
+                content=row.content,
+            ),
+        )
+        scored.append((score, row, image_urls))
+
+    if not scored:
+        return []
+
+    selected = [
+        (row, image_urls)
+        for score, row, image_urls in sorted(scored, key=lambda item: item[0], reverse=True)
+        if score > 0
+    ]
+    if not selected:
+        selected = [(row, image_urls) for _score, row, image_urls in scored]
+
+    images = []
+    seen_urls = set()
+    for row, image_urls in selected:
+        title = _scraped_title(row.content, row.url)
+        for image_url in image_urls:
+            if image_url in seen_urls:
+                continue
+            seen_urls.add(image_url)
+            images.append(
+                {
+                    "title": title,
+                    "page_url": row.url,
+                    "image_url": image_url,
+                    "caption": f"{title}\n{row.url}",
+                }
+            )
+            if len(images) >= max(1, min(limit, 5)):
+                return images
+
+    return images
 
 
 def retrieve_relevant_context(db: Session, query: str) -> str:

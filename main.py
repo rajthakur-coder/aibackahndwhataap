@@ -51,6 +51,7 @@ from pinecone_service import status as pinecone_status
 from rag_service import (
     find_relevant_catalog_products,
     find_relevant_product_image,
+    find_relevant_website_images,
     save_knowledge_document,
     save_knowledge_chunks,
     save_scraped_chunks,
@@ -432,6 +433,57 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
                 "Image send nahi ho payi, lekin product detail yeh hai:\n"
                 f"{product_image['caption']}"
             )
+            await run_in_threadpool(send_whatsapp_message, phone, fallback_text)
+            save_message(db, phone, fallback_text, "outgoing")
+
+        event.status = "processed"
+        event.processed_at = datetime.utcnow()
+        db.commit()
+        return
+
+    website_images = find_relevant_website_images(db, text)
+    if website_images:
+        sent_count = 0
+        failed_images = []
+        for website_image in website_images:
+            try:
+                await run_in_threadpool(
+                    send_whatsapp_image,
+                    phone,
+                    website_image["image_url"],
+                    website_image["caption"],
+                )
+                save_message(
+                    db,
+                    phone,
+                    f"[image] {website_image['caption']}",
+                    "outgoing",
+                )
+                sent_count += 1
+            except Exception as exc:
+                failed_images.append(website_image)
+                db.add(
+                    AgentAction(
+                        phone=phone,
+                        action_type="website_image_send_failed",
+                        status="failed",
+                        payload=json.dumps(
+                            {
+                                "title": website_image["title"],
+                                "page_url": website_image["page_url"],
+                                "image_url": website_image["image_url"],
+                            }
+                        ),
+                        result=json.dumps({"error": str(exc)}),
+                    )
+                )
+                db.commit()
+
+        if sent_count == 0:
+            fallback_lines = ["Image send nahi ho payi, yeh image links dekh sakte hain:"]
+            for image in failed_images[:3]:
+                fallback_lines.append(f"{image['title']}\n{image['image_url']}")
+            fallback_text = "\n\n".join(fallback_lines)
             await run_in_threadpool(send_whatsapp_message, phone, fallback_text)
             save_message(db, phone, fallback_text, "outgoing")
 
