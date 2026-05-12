@@ -8,11 +8,18 @@ from starlette.concurrency import run_in_threadpool
 from app.db.session import get_db
 from app.models.entities import AgentAction, EcommerceConnection, EcommerceOrder, EcommerceProduct
 from app.schemas import (
+    AbandonedCartRequest,
     DeliveredFollowupRequest,
     EcommerceConnectionRequest,
     EcommerceConnectionUpdateRequest,
     EcommerceProductSyncRequest,
     EcommerceSyncRequest,
+)
+from app.services.automations import (
+    create_abandoned_cart_event,
+    enqueue_order_automation_events,
+    process_automation_event,
+    serialize_event,
 )
 from app.services.ecommerce import (
     create_connection,
@@ -189,7 +196,99 @@ async def receive_ecommerce_order_webhook(
         db.commit()
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return {"status": "success", "order": serialize_ecommerce_order(order)}
+    automation_results = []
+    try:
+        events = enqueue_order_automation_events(db, order, source="ecommerce_order_webhook")
+        automation_results = [process_automation_event(db, event) for event in events]
+    except Exception as exc:
+        db.add(
+            AgentAction(
+                phone=order.phone,
+                action_type="ecommerce_order_automation_failed",
+                status="failed",
+                payload=json.dumps(
+                    {
+                        "connection_id": connection.id,
+                        "order_id": order.order_number,
+                    }
+                ),
+                result=json.dumps({"error": str(exc)}),
+            )
+        )
+        db.commit()
+
+    return {
+        "status": "success",
+        "order": serialize_ecommerce_order(order),
+        "automations": automation_results,
+    }
+
+
+@router.post("/connections/{connection_id}/webhook/abandoned-cart")
+async def receive_abandoned_cart_webhook(
+    connection_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    connection = db.query(EcommerceConnection).filter(EcommerceConnection.id == connection_id).first()
+    if not connection:
+        raise HTTPException(status_code=404, detail="Ecommerce connection not found")
+
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid abandoned cart webhook JSON") from exc
+
+    checkout = body.get("checkout") if isinstance(body, dict) and isinstance(body.get("checkout"), dict) else body
+    if not isinstance(checkout, dict):
+        raise HTTPException(status_code=400, detail="Invalid abandoned cart payload")
+    customer = checkout.get("customer") or {}
+    shipping = checkout.get("shipping_address") or {}
+    billing = checkout.get("billing_address") or {}
+    phone = (
+        checkout.get("phone")
+        or shipping.get("phone")
+        or billing.get("phone")
+        or customer.get("phone")
+    )
+    customer_name = " ".join(
+        value
+        for value in [
+            shipping.get("first_name") or customer.get("first_name"),
+            shipping.get("last_name") or customer.get("last_name"),
+        ]
+        if value
+    ).strip()
+    payload = {
+        "external_id": str(checkout.get("id") or checkout.get("token") or ""),
+        "phone": phone,
+        "customer_name": customer_name or customer.get("name") or "there",
+        "cart_url": checkout.get("abandoned_checkout_url") or checkout.get("cart_url") or checkout.get("web_url") or "",
+        "total": str(checkout.get("total_price") or checkout.get("total") or ""),
+        "currency": checkout.get("currency") or "",
+        "items": checkout.get("line_items") or checkout.get("items") or [],
+    }
+    if not payload["phone"]:
+        raise HTTPException(status_code=400, detail="Abandoned cart phone is required")
+
+    event = create_abandoned_cart_event(db, payload=payload, source="ecommerce_abandoned_cart_webhook")
+    result = process_automation_event(db, event)
+    return {"status": "queued", "event": serialize_event(event), "automation": result}
+
+
+@router.post("/abandoned-cart")
+def add_abandoned_cart(
+    data: AbandonedCartRequest,
+    db: Session = Depends(get_db),
+):
+    event = create_abandoned_cart_event(
+        db,
+        payload=data.model_dump(),
+        source="ecommerce_api",
+        delay_seconds=data.delay_seconds,
+    )
+    result = process_automation_event(db, event)
+    return {"status": "queued", "event": serialize_event(event), "automation": result}
 
 
 @router.get("/orders")

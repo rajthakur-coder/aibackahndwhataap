@@ -227,6 +227,69 @@ class AgentAction(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class MessageTemplate(Base):
+    __tablename__ = "message_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True, nullable=False)
+    body = Column(Text, nullable=False)
+    channel = Column(String, default="whatsapp", index=True)
+    template_type = Column(String, default="text", index=True)
+    provider_template_name = Column(String, nullable=True, index=True)
+    language = Column(String, default="en")
+    body_variable_order = Column(Text, nullable=True)
+    status = Column(String, default="active", index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AutomationRule(Base):
+    __tablename__ = "automation_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True, nullable=False)
+    trigger = Column(String, index=True, nullable=False)
+    message_template_id = Column(Integer, nullable=True, index=True)
+    message_body = Column(Text, nullable=True)
+    delay_seconds = Column(Integer, default=0)
+    conditions = Column(Text, nullable=True)
+    enabled = Column(String, default="true", index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AutomationEvent(Base):
+    __tablename__ = "automation_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trigger = Column(String, index=True, nullable=False)
+    source = Column(String, default="system", index=True)
+    external_id = Column(String, nullable=True, index=True)
+    phone = Column(String, nullable=True, index=True)
+    payload = Column(Text, nullable=True)
+    status = Column(String, default="pending", index=True)
+    scheduled_for = Column(DateTime, default=datetime.utcnow, index=True)
+    processed_at = Column(DateTime, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AutomationExecution(Base):
+    __tablename__ = "automation_executions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(Integer, index=True, nullable=False)
+    rule_id = Column(Integer, index=True, nullable=False)
+    phone = Column(String, nullable=True, index=True)
+    status = Column(String, default="pending", index=True)
+    rendered_message = Column(Text, nullable=True)
+    provider_response = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    sent_at = Column(DateTime, nullable=True)
+
+
 class KnowledgeDocument(Base):
     __tablename__ = "knowledge_documents"
 

@@ -2,6 +2,10 @@
 
 from app.schemas.requests import (
     ActionRequest,
+    AbandonedCartRequest,
+    AutomationEventRequest,
+    AutomationRuleRequest,
+    AutomationRuleUpdateRequest,
     DeliveredFollowupRequest,
     DocumentRequest,
     EcommerceConnectionRequest,
@@ -11,11 +15,17 @@ from app.schemas.requests import (
     OrderRequest,
     RetryWebhookEventsRequest,
     ScrapeRequest,
+    SendTemplateRequest,
     SendMessageRequest,
+    MessageTemplateRequest,
 )
 
 __all__ = [
     "ActionRequest",
+    "AbandonedCartRequest",
+    "AutomationEventRequest",
+    "AutomationRuleRequest",
+    "AutomationRuleUpdateRequest",
     "DeliveredFollowupRequest",
     "DocumentRequest",
     "EcommerceConnectionRequest",
@@ -25,5 +35,7 @@ __all__ = [
     "OrderRequest",
     "RetryWebhookEventsRequest",
     "ScrapeRequest",
+    "SendTemplateRequest",
     "SendMessageRequest",
+    "MessageTemplateRequest",
 ]

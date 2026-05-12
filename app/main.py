@@ -5,13 +5,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import ROUTERS
 from app.core.config import settings
-from app.db.session import engine
+from app.db.session import SessionLocal, engine
 from app.models.entities import Base
+from app.services.automations import automation_processor_loop, ensure_default_automation_rules
 from app.services.ecommerce_sync import ecommerce_auto_sync_loop
 
 
 def create_app() -> FastAPI:
     Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        ensure_default_automation_rules(db)
+    finally:
+        db.close()
 
     app = FastAPI(title="AI WhatsApp Automation API", version="1.0.0")
     app.add_middleware(
@@ -26,9 +32,11 @@ def create_app() -> FastAPI:
         app.include_router(router)
 
     @app.on_event("startup")
-    async def start_ecommerce_auto_sync() -> None:
+    async def start_background_loops() -> None:
         if settings.ecommerce_auto_sync_enabled:
             asyncio.create_task(ecommerce_auto_sync_loop())
+        if settings.automation_processor_enabled:
+            asyncio.create_task(automation_processor_loop())
 
     return app
 

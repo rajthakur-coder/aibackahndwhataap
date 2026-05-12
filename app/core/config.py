@@ -37,6 +37,18 @@ class Settings:
         1,
         min(int(os.getenv("ECOMMERCE_AUTO_SYNC_PRODUCT_LIMIT", "100")), 250),
     )
+    automation_processor_enabled = os.getenv(
+        "AUTOMATION_PROCESSOR_ENABLED",
+        "true",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    automation_processor_interval_seconds = max(
+        15,
+        int(os.getenv("AUTOMATION_PROCESSOR_INTERVAL_SECONDS", "60")),
+    )
+    automation_processor_limit = max(
+        1,
+        min(int(os.getenv("AUTOMATION_PROCESSOR_LIMIT", "50")), 200),
+    )
 
 
 settings = Settings()

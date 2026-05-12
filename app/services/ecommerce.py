@@ -7,9 +7,6 @@ from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
 from app.models.entities import AgentAction, EcommerceConnection, EcommerceOrder, EcommerceProduct
-from app.services.whatsapp import send_whatsapp_message
-
-
 REQUEST_TIMEOUT = 30
 SHOPIFY_API_VERSION = "2025-04"
 SUPPORTED_PLATFORMS = {"shopify", "woocommerce"}
@@ -576,6 +573,12 @@ def is_delivered_order(order: EcommerceOrder) -> bool:
 
 
 def send_delivered_followups(db: Session, limit: int = 25) -> dict:
+    from app.services.automations import (
+        TRIGGER_ORDER_DELIVERED,
+        enqueue_order_automation_events,
+        process_automation_event,
+    )
+
     orders = (
         db.query(EcommerceOrder)
         .filter(EcommerceOrder.delivered_message_sent_at.is_(None))
@@ -591,9 +594,15 @@ def send_delivered_followups(db: Session, limit: int = 25) -> dict:
             skipped += 1
             continue
 
-        message = f"Thank you! Your order {order.order_number} has been delivered. {cross_sell_text(order)}"
         try:
-            send_whatsapp_message(order.phone, message)
+            events = enqueue_order_automation_events(
+                db,
+                order,
+                source="delivered_followup",
+                triggers=[TRIGGER_ORDER_DELIVERED],
+            )
+            results = [process_automation_event(db, event) for event in events]
+            was_sent = any(result.get("sent", 0) > 0 for result in results)
         except Exception as exc:
             db.add(
                 AgentAction(
@@ -608,6 +617,10 @@ def send_delivered_followups(db: Session, limit: int = 25) -> dict:
             skipped += 1
             continue
 
+        if not was_sent:
+            skipped += 1
+            continue
+
         order.delivered_message_sent_at = datetime.utcnow()
         db.add(
             AgentAction(
@@ -615,7 +628,7 @@ def send_delivered_followups(db: Session, limit: int = 25) -> dict:
                 action_type="delivered_followup_sent",
                 status="sent",
                 payload=json.dumps({"order_id": order.order_number}),
-                result=json.dumps({"message": message}),
+                result=json.dumps({"processor": "automation_engine"}),
             )
         )
         db.commit()
