@@ -3,9 +3,10 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 import requests
+from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
-from models import AgentAction, EcommerceConnection, EcommerceOrder
+from models import AgentAction, EcommerceConnection, EcommerceOrder, EcommerceProduct
 from whatsapp_service import send_whatsapp_message
 
 
@@ -155,6 +156,200 @@ def fetch_orders(connection: EcommerceConnection, limit: int = 50) -> list[dict]
     )
     response.raise_for_status()
     return response.json()
+
+
+def fetch_products(connection: EcommerceConnection, limit: int = 100) -> list[dict]:
+    limit = max(1, min(limit, 250))
+    if connection.platform == "shopify":
+        response = requests.get(
+            f"{_shopify_base_url(connection)}/products.json",
+            headers=_shopify_headers(connection),
+            params={
+                "limit": limit,
+                "fields": "id,title,handle,body_html,vendor,product_type,tags,status,variants,images,options,created_at,updated_at",
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json().get("products", [])
+
+    response = requests.get(
+        f"{_woocommerce_base_url(connection)}/products",
+        auth=(connection.consumer_key or "", connection.consumer_secret or ""),
+        params={"per_page": min(limit, 100), "orderby": "date", "order": "desc"},
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _plain_text(html: str | None) -> str:
+    if not html:
+        return ""
+    soup = BeautifulSoup(html, "lxml")
+    return "\n".join(line.strip() for line in soup.get_text("\n").splitlines() if line.strip())
+
+
+def _price_range(values: list[str | int | float | None]) -> tuple[str | None, str | None]:
+    prices = []
+    for value in values:
+        if value in {None, ""}:
+            continue
+        try:
+            prices.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    if not prices:
+        return None, None
+    low = min(prices)
+    high = max(prices)
+    return f"{low:g}", f"{high:g}"
+
+
+def _normalize_shopify_product(connection: EcommerceConnection, product: dict) -> dict:
+    variants = product.get("variants") or []
+    images = product.get("images") or []
+    price_min, price_max = _price_range([variant.get("price") for variant in variants])
+    skus = [variant.get("sku") for variant in variants if variant.get("sku")]
+    inventory_values = [
+        str(variant.get("inventory_quantity"))
+        for variant in variants
+        if variant.get("inventory_quantity") is not None
+    ]
+    handle = product.get("handle")
+    return {
+        "external_id": str(product.get("id")),
+        "title": product.get("title") or "Untitled product",
+        "handle": handle,
+        "product_url": f"https://{connection.store_url}/products/{handle}" if handle else None,
+        "description": _plain_text(product.get("body_html")),
+        "vendor": product.get("vendor"),
+        "product_type": product.get("product_type"),
+        "tags": product.get("tags"),
+        "status": product.get("status"),
+        "price_min": price_min,
+        "price_max": price_max,
+        "currency": None,
+        "sku": ", ".join(skus[:10]) if skus else None,
+        "inventory": ", ".join(inventory_values[:20]) if inventory_values else None,
+        "image_urls": [image.get("src") for image in images if image.get("src")],
+    }
+
+
+def _normalize_woocommerce_product(connection: EcommerceConnection, product: dict) -> dict:
+    images = product.get("images") or []
+    variations = product.get("variations") or []
+    price_min, price_max = _price_range(
+        [
+            product.get("price"),
+            product.get("regular_price"),
+            product.get("sale_price"),
+            product.get("min_price"),
+            product.get("max_price"),
+        ]
+    )
+    tags = ", ".join(tag.get("name", "") for tag in product.get("tags", []) if tag.get("name"))
+    categories = ", ".join(category.get("name", "") for category in product.get("categories", []) if category.get("name"))
+    return {
+        "external_id": str(product.get("id")),
+        "title": product.get("name") or "Untitled product",
+        "handle": product.get("slug"),
+        "product_url": product.get("permalink"),
+        "description": _plain_text(product.get("description") or product.get("short_description")),
+        "vendor": None,
+        "product_type": categories or product.get("type"),
+        "tags": tags,
+        "status": product.get("status"),
+        "price_min": price_min,
+        "price_max": price_max,
+        "currency": None,
+        "sku": product.get("sku"),
+        "inventory": str(product.get("stock_quantity")) if product.get("stock_quantity") is not None else product.get("stock_status"),
+        "image_urls": [image.get("src") for image in images if image.get("src")],
+        "variation_ids": variations[:20],
+    }
+
+
+def _normalize_product(connection: EcommerceConnection, product: dict) -> dict:
+    if connection.platform == "shopify":
+        return _normalize_shopify_product(connection, product)
+    return _normalize_woocommerce_product(connection, product)
+
+
+def upsert_product(db: Session, connection: EcommerceConnection, product: dict) -> EcommerceProduct:
+    normalized = _normalize_product(connection, product)
+    row = (
+        db.query(EcommerceProduct)
+        .filter(
+            EcommerceProduct.connection_id == connection.id,
+            EcommerceProduct.external_id == normalized["external_id"],
+        )
+        .first()
+    )
+    if not row:
+        row = EcommerceProduct(
+            connection_id=connection.id,
+            platform=connection.platform,
+            external_id=normalized["external_id"],
+            title=normalized["title"],
+        )
+        db.add(row)
+
+    row.title = normalized["title"]
+    row.handle = normalized["handle"]
+    row.product_url = normalized["product_url"]
+    row.description = normalized["description"]
+    row.vendor = normalized["vendor"]
+    row.product_type = normalized["product_type"]
+    row.tags = normalized["tags"]
+    row.status = normalized["status"]
+    row.price_min = normalized["price_min"]
+    row.price_max = normalized["price_max"]
+    row.currency = normalized["currency"]
+    row.sku = normalized["sku"]
+    row.inventory = normalized["inventory"]
+    row.image_urls = json.dumps(normalized["image_urls"])
+    row.raw_payload = json.dumps(product)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def product_knowledge_text(product: EcommerceProduct) -> str:
+    image_urls = []
+    if product.image_urls:
+        try:
+            image_urls = json.loads(product.image_urls)
+        except json.JSONDecodeError:
+            image_urls = []
+
+    price = product.price_min or ""
+    if product.price_max and product.price_max != product.price_min:
+        price = f"{product.price_min or ''} - {product.price_max}"
+
+    parts = [
+        f"Product: {product.title}",
+        f"Platform: {product.platform}",
+        f"Product URL: {product.product_url or ''}",
+        f"Price: {price} {product.currency or ''}".strip(),
+        f"SKU: {product.sku or ''}",
+        f"Availability/Inventory: {product.inventory or ''}",
+        f"Vendor: {product.vendor or ''}",
+        f"Category/type: {product.product_type or ''}",
+        f"Tags: {product.tags or ''}",
+        f"Status: {product.status or ''}",
+        "Images: " + ", ".join(image_urls[:20]),
+        f"Description:\n{product.description or ''}",
+    ]
+    return "\n".join(part for part in parts if part.strip())
+
+
+def sync_products(db: Session, connection: EcommerceConnection, limit: int = 100) -> dict:
+    products = fetch_products(connection, limit=limit)
+    synced = [upsert_product(db, connection, product) for product in products]
+    connection.last_sync_at = datetime.utcnow()
+    db.commit()
+    return {"status": "success", "fetched": len(products), "synced": len(synced)}
 
 
 def _phone_from_shopify(order: dict) -> str | None:

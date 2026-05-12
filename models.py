@@ -164,6 +164,32 @@ class EcommerceOrder(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class EcommerceProduct(Base):
+    __tablename__ = "ecommerce_products"
+
+    id = Column(Integer, primary_key=True, index=True)
+    connection_id = Column(Integer, index=True, nullable=False)
+    platform = Column(String, index=True, nullable=False)
+    external_id = Column(String, index=True, nullable=False)
+    title = Column(String, index=True, nullable=False)
+    handle = Column(String, nullable=True, index=True)
+    product_url = Column(Text, nullable=True)
+    description = Column(Text, nullable=True)
+    vendor = Column(String, nullable=True)
+    product_type = Column(String, nullable=True, index=True)
+    tags = Column(Text, nullable=True)
+    status = Column(String, nullable=True, index=True)
+    price_min = Column(String, nullable=True)
+    price_max = Column(String, nullable=True)
+    currency = Column(String, nullable=True)
+    sku = Column(String, nullable=True, index=True)
+    inventory = Column(String, nullable=True)
+    image_urls = Column(Text, nullable=True)
+    raw_payload = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class HandoffTicket(Base):
     __tablename__ = "handoff_tickets"
 

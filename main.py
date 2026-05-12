@@ -22,8 +22,10 @@ from agent_service import (
 from database import SessionLocal, engine, get_db
 from ecommerce_service import (
     create_connection,
+    product_knowledge_text,
     send_delivered_followups,
     sync_orders,
+    sync_products,
     test_connection,
     update_connection,
     upsert_order as upsert_ecommerce_order,
@@ -35,6 +37,7 @@ from models import (
     CustomerMemory,
     EcommerceConnection,
     EcommerceOrder,
+    EcommerceProduct,
     HandoffTicket,
     KnowledgeDocument,
     Lead,
@@ -45,9 +48,15 @@ from models import (
 )
 from openai_service import generate_ai_reply
 from pinecone_service import status as pinecone_status
-from rag_service import save_knowledge_document, save_knowledge_chunks, save_scraped_chunks
-from scraper import scrape_website
-from whatsapp_service import send_whatsapp_message
+from rag_service import (
+    find_relevant_catalog_products,
+    find_relevant_product_image,
+    save_knowledge_document,
+    save_knowledge_chunks,
+    save_scraped_chunks,
+)
+from scraper import crawl_website
+from whatsapp_service import send_whatsapp_image, send_whatsapp_message
 
 load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
 
@@ -81,6 +90,58 @@ def ecommerce_auto_sync_limit() -> int:
     return max(1, min(int(os.getenv("ECOMMERCE_AUTO_SYNC_LIMIT", "50")), 100))
 
 
+def ecommerce_auto_sync_products_enabled() -> bool:
+    return os.getenv("ECOMMERCE_AUTO_SYNC_PRODUCTS_ENABLED", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def ecommerce_auto_sync_product_limit() -> int:
+    return max(1, min(int(os.getenv("ECOMMERCE_AUTO_SYNC_PRODUCT_LIMIT", "100")), 250))
+
+
+def sync_product_catalog_knowledge(
+    db: Session,
+    connection: EcommerceConnection,
+    limit: int,
+) -> dict:
+    products = (
+        db.query(EcommerceProduct)
+        .filter(EcommerceProduct.connection_id == connection.id)
+        .order_by(EcommerceProduct.updated_at.desc())
+        .limit(max(1, min(limit, 250)))
+        .all()
+    )
+    source = f"ecommerce://{connection.platform}/{connection.id}/products"
+    content = "\n\n---\n\n".join(product_knowledge_text(product) for product in products)
+    if not content:
+        return {"knowledge_source": source, "knowledge_products": 0}
+
+    document = (
+        db.query(KnowledgeDocument)
+        .filter(KnowledgeDocument.source == source)
+        .first()
+    )
+    if document:
+        document.title = f"{connection.name} product catalog"
+        document.content = content
+        db.commit()
+        db.refresh(document)
+        save_knowledge_chunks(db, document)
+    else:
+        save_knowledge_document(
+            db,
+            title=f"{connection.name} product catalog",
+            source=source,
+            content=content,
+        )
+
+    return {"knowledge_source": source, "knowledge_products": len(products)}
+
+
 def sync_active_ecommerce_connections() -> dict:
     db = SessionLocal()
     try:
@@ -96,6 +157,16 @@ def sync_active_ecommerce_connections() -> dict:
         for connection in connections:
             try:
                 result = sync_orders(db, connection, ecommerce_auto_sync_limit())
+                if ecommerce_auto_sync_products_enabled():
+                    product_result = sync_products(db, connection, ecommerce_auto_sync_product_limit())
+                    product_result.update(
+                        sync_product_catalog_knowledge(
+                            db,
+                            connection,
+                            ecommerce_auto_sync_product_limit(),
+                        )
+                    )
+                    result["products"] = product_result
                 synced += result.get("synced", 0)
                 results.append({"connection_id": connection.id, **result})
             except Exception as exc:
@@ -148,6 +219,7 @@ class SendMessageRequest(PydanticBaseModel):
 
 class ScrapeRequest(PydanticBaseModel):
     url: str
+    max_pages: int = 80
 
 
 class DocumentRequest(PydanticBaseModel):
@@ -188,6 +260,10 @@ class EcommerceConnectionUpdateRequest(PydanticBaseModel):
 
 class EcommerceSyncRequest(PydanticBaseModel):
     limit: int = 50
+
+
+class EcommerceProductSyncRequest(PydanticBaseModel):
+    limit: int = 100
 
 
 class DeliveredFollowupRequest(PydanticBaseModel):
@@ -251,6 +327,12 @@ def get_or_create_webhook_event(db: Session, incoming: dict) -> tuple[WebhookEve
     return event, True
 
 
+def should_process_webhook_event(event: WebhookEvent, created: bool) -> bool:
+    if created:
+        return True
+    return event.status == "failed"
+
+
 async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
     phone = event.phone or ""
     text = event.message_text or ""
@@ -272,6 +354,84 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
     )
     await run_in_threadpool(send_whatsapp_message, phone, ai_reply)
     save_message(db, phone, ai_reply, "outgoing")
+
+    catalog_products = find_relevant_catalog_products(db, text)
+    if catalog_products:
+        lines = ["Catalog:"]
+        for index, product in enumerate(catalog_products, start=1):
+            price = product.get("price_min") or ""
+            if product.get("price_max") and product["price_max"] != product.get("price_min"):
+                price = f"{product.get('price_min') or ''} - {product['price_max']}"
+            product_line = f"{index}. {product['title']}"
+            if price:
+                product_line += f" - {price}"
+            if product.get("product_url"):
+                product_line += f"\n{product['product_url']}"
+            lines.append(product_line)
+
+        catalog_text = "\n\n".join(lines)
+        await run_in_threadpool(send_whatsapp_message, phone, catalog_text)
+        save_message(db, phone, catalog_text, "outgoing")
+
+        for product in catalog_products:
+            if not product.get("image_url"):
+                continue
+            try:
+                await run_in_threadpool(
+                    send_whatsapp_image,
+                    phone,
+                    product["image_url"],
+                    product["caption"],
+                )
+                save_message(db, phone, f"[image] {product['caption']}", "outgoing")
+            except Exception as exc:
+                db.add(
+                    AgentAction(
+                        phone=phone,
+                        action_type="catalog_image_send_failed",
+                        status="failed",
+                        payload=json.dumps(
+                            {
+                                "title": product["title"],
+                                "image_url": product["image_url"],
+                            }
+                        ),
+                        result=json.dumps({"error": str(exc)}),
+                    )
+                )
+                db.commit()
+
+    product_image = find_relevant_product_image(db, text)
+    if product_image and not catalog_products:
+        try:
+            await run_in_threadpool(
+                send_whatsapp_image,
+                phone,
+                product_image["image_url"],
+                product_image["caption"],
+            )
+            save_message(
+                db,
+                phone,
+                f"[image] {product_image['caption']}",
+                "outgoing",
+            )
+        except Exception as exc:
+            db.add(
+                AgentAction(
+                    phone=phone,
+                    action_type="product_image_send_failed",
+                    status="failed",
+                    payload=json.dumps(
+                        {
+                            "title": product_image["title"],
+                            "image_url": product_image["image_url"],
+                        }
+                    ),
+                    result=json.dumps({"error": str(exc)}),
+                )
+            )
+            db.commit()
 
     event.status = "processed"
     event.processed_at = datetime.utcnow()
@@ -326,6 +486,35 @@ def serialize_ecommerce_order(order: EcommerceOrder) -> dict:
             str(order.delivered_message_sent_at) if order.delivered_message_sent_at else None
         ),
         "updated_at": str(order.updated_at),
+    }
+
+
+def serialize_ecommerce_product(product: EcommerceProduct) -> dict:
+    try:
+        image_urls = json.loads(product.image_urls or "[]")
+    except json.JSONDecodeError:
+        image_urls = []
+
+    return {
+        "id": product.id,
+        "connection_id": product.connection_id,
+        "platform": product.platform,
+        "external_id": product.external_id,
+        "title": product.title,
+        "handle": product.handle,
+        "product_url": product.product_url,
+        "description": product.description,
+        "vendor": product.vendor,
+        "product_type": product.product_type,
+        "tags": product.tags,
+        "status": product.status,
+        "price_min": product.price_min,
+        "price_max": product.price_max,
+        "currency": product.currency,
+        "sku": product.sku,
+        "inventory": product.inventory,
+        "image_urls": image_urls,
+        "updated_at": str(product.updated_at),
     }
 
 
@@ -389,7 +578,7 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
 
     for incoming in incoming_messages:
         event, created = get_or_create_webhook_event(db, incoming)
-        if not created and event.status == "processed":
+        if not should_process_webhook_event(event, created):
             skipped += 1
             continue
 
@@ -483,23 +672,44 @@ async def retry_failed_webhook_events(
 @app.post("/scrape")
 async def scrape(data: ScrapeRequest, db: Session = Depends(get_db)):
     try:
-        content = await run_in_threadpool(scrape_website, data.url)
-        row = ScrapedData(url=data.url, content=content)
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-        rag_result = save_scraped_chunks(db, row)
+        pages = await run_in_threadpool(crawl_website, data.url, data.max_pages)
+        if not pages:
+            raise HTTPException(status_code=502, detail="Scrape failed: no readable pages found")
+
+        saved_pages = []
+        total_chunks = 0
+        pinecone_upserted = 0
+        for page in pages:
+            row = ScrapedData(url=page["url"], content=page["content"])
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            rag_result = save_scraped_chunks(db, row)
+            total_chunks += rag_result["chunks"]
+            pinecone_upserted += rag_result["pinecone_upserted"]
+            saved_pages.append(
+                {
+                    "id": row.id,
+                    "url": row.url,
+                    "title": page.get("title"),
+                    "content_length": len(row.content),
+                    "images": len(page.get("image_urls") or []),
+                    "social_links": len(page.get("social_links") or []),
+                }
+            )
 
         return {
             "status": "success",
-            "id": row.id,
-            "url": row.url,
-            "content_length": len(row.content),
-            "chunk_count": rag_result["chunks"],
-            "pinecone_upserted": rag_result["pinecone_upserted"],
+            "requested_url": data.url,
+            "pages_scraped": len(saved_pages),
+            "chunk_count": total_chunks,
+            "pinecone_upserted": pinecone_upserted,
+            "pages": saved_pages,
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Scrape failed: {exc}") from exc
 
@@ -665,6 +875,46 @@ async def sync_ecommerce_orders(
         return await run_in_threadpool(sync_orders, db, connection, data.limit)
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/ecommerce/connections/{connection_id}/sync-products")
+async def sync_ecommerce_products(
+    connection_id: int,
+    data: EcommerceProductSyncRequest,
+    db: Session = Depends(get_db),
+):
+    connection = db.query(EcommerceConnection).filter(EcommerceConnection.id == connection_id).first()
+    if not connection:
+        raise HTTPException(status_code=404, detail="Ecommerce connection not found")
+
+    try:
+        result = await run_in_threadpool(sync_products, db, connection, data.limit)
+        result.update(sync_product_catalog_knowledge(db, connection, data.limit))
+        return result
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/ecommerce/products")
+def list_ecommerce_products(
+    connection_id: int | None = None,
+    q: str | None = None,
+    db: Session = Depends(get_db),
+):
+    query = db.query(EcommerceProduct)
+    if connection_id is not None:
+        query = query.filter(EcommerceProduct.connection_id == connection_id)
+    if q:
+        search = f"%{q.strip()}%"
+        query = query.filter(
+            (EcommerceProduct.title.ilike(search))
+            | (EcommerceProduct.description.ilike(search))
+            | (EcommerceProduct.tags.ilike(search))
+            | (EcommerceProduct.sku.ilike(search))
+        )
+
+    rows = query.order_by(EcommerceProduct.updated_at.desc()).limit(200).all()
+    return [serialize_ecommerce_product(row) for row in rows]
 
 
 @app.post("/ecommerce/sync-active")

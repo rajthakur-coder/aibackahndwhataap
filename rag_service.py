@@ -6,7 +6,8 @@ from collections import Counter
 
 from sqlalchemy.orm import Session
 
-from models import KnowledgeChunk, KnowledgeDocument, ScrapedChunk, ScrapedData
+from ecommerce_service import product_knowledge_text
+from models import EcommerceProduct, KnowledgeChunk, KnowledgeDocument, ScrapedChunk, ScrapedData
 from pinecone_service import query_context, upsert_chunks
 
 
@@ -51,6 +52,34 @@ STOP_WORDS = {
     "where",
     "with",
     "you",
+}
+IMAGE_REQUEST_TERMS = {
+    "image",
+    "images",
+    "photo",
+    "photos",
+    "pic",
+    "pics",
+    "picture",
+    "pictures",
+    "img",
+    "tasveer",
+    "tasvir",
+    "dikhana",
+    "dikhao",
+    "bhejo",
+}
+CATALOG_REQUEST_TERMS = {
+    "catalog",
+    "catalogue",
+    "products",
+    "product",
+    "collection",
+    "collections",
+    "items",
+    "list",
+    "menu",
+    "range",
 }
 
 
@@ -256,6 +285,111 @@ def _score_knowledge_chunk(
     return lexical_score + max(vector_score, 0.0)
 
 
+def is_image_request(query: str) -> bool:
+    return bool(set(_tokens(query)) & IMAGE_REQUEST_TERMS)
+
+
+def is_catalog_request(query: str) -> bool:
+    terms = set(_tokens(query))
+    return bool(terms & CATALOG_REQUEST_TERMS and terms & {"bhejo", "dikhao", "send", "show", "do", "de"})
+
+
+def _product_image_urls(product: EcommerceProduct) -> list[str]:
+    try:
+        image_urls = json.loads(product.image_urls or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [url for url in image_urls if isinstance(url, str) and url.startswith("http")]
+
+
+def _product_caption(product: EcommerceProduct) -> str:
+    caption_parts = [product.title]
+    if product.price_min:
+        price = product.price_min
+        if product.price_max and product.price_max != product.price_min:
+            price = f"{product.price_min} - {product.price_max}"
+        caption_parts.append(f"Price: {price}")
+    if product.product_url:
+        caption_parts.append(product.product_url)
+    return "\n".join(caption_parts)
+
+
+def find_relevant_catalog_products(db: Session, query: str, limit: int = 5) -> list[dict]:
+    if not is_catalog_request(query):
+        return []
+
+    query_terms = Counter(_tokens(query))
+    products = db.query(EcommerceProduct).order_by(EcommerceProduct.updated_at.desc()).limit(400).all()
+    scored = []
+    for product in products:
+        score = _score_chunk(
+            query_terms,
+            ScrapedChunk(
+                scraped_data_id=0,
+                url=product.product_url or product.title,
+                chunk_index=0,
+                content=product_knowledge_text(product),
+            ),
+        )
+        scored.append((score, product))
+
+    sorted_products = [
+        product
+        for _score, product in sorted(scored, key=lambda item: item[0], reverse=True)
+    ][: max(1, min(limit, 10))]
+
+    return [
+        {
+            "title": product.title,
+            "product_url": product.product_url,
+            "price_min": product.price_min,
+            "price_max": product.price_max,
+            "image_url": (_product_image_urls(product) or [None])[0],
+            "caption": _product_caption(product),
+        }
+        for product in sorted_products
+    ]
+
+
+def find_relevant_product_image(db: Session, query: str) -> dict | None:
+    if not is_image_request(query):
+        return None
+
+    query_terms = Counter(_tokens(query))
+    if not query_terms:
+        return None
+
+    products = db.query(EcommerceProduct).order_by(EcommerceProduct.updated_at.desc()).limit(400).all()
+    best_product = None
+    best_score = 0.0
+    for product in products:
+        score = _score_chunk(
+            query_terms,
+            ScrapedChunk(
+                scraped_data_id=0,
+                url=product.product_url or product.title,
+                chunk_index=0,
+                content=product_knowledge_text(product),
+            ),
+        )
+        if score > best_score:
+            best_score = score
+            best_product = product
+
+    if not best_product or best_score <= 0:
+        return None
+
+    image_url = (_product_image_urls(best_product) or [None])[0]
+    if not image_url:
+        return None
+
+    return {
+        "title": best_product.title,
+        "image_url": image_url,
+        "caption": _product_caption(best_product),
+    }
+
+
 def retrieve_relevant_context(db: Session, query: str) -> str:
     query_terms = Counter(_tokens(query))
     if not query_terms:
@@ -280,6 +414,7 @@ def retrieve_relevant_context(db: Session, query: str) -> str:
         .all()
     )
     chunks = db.query(ScrapedChunk).order_by(ScrapedChunk.created_at.desc()).limit(400).all()
+    products = db.query(EcommerceProduct).order_by(EcommerceProduct.updated_at.desc()).limit(400).all()
 
     if not chunks:
         chunks = []
@@ -299,6 +434,16 @@ def retrieve_relevant_context(db: Session, query: str) -> str:
         (_score_chunk(query_terms, chunk), chunk)
         for chunk in chunks
     ]
+    product_chunks = [
+        ScrapedChunk(
+            scraped_data_id=0,
+            url=product.product_url or product.title,
+            chunk_index=0,
+            content=product_knowledge_text(product),
+        )
+        for product in products
+    ]
+    scored.extend((_score_chunk(query_terms, chunk), chunk) for chunk in product_chunks)
     scored.extend(
         (_score_knowledge_chunk(query_terms, query_embedding, chunk), chunk)
         for chunk in knowledge_chunks
