@@ -346,15 +346,6 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         save_message(db, phone, text, "incoming")
 
     agent_state = process_agent_message(db, phone, text)
-    ai_reply = agent_state["reply_override"] or generate_ai_reply(
-        db,
-        phone,
-        text,
-        agent_context=agent_state["context"],
-    )
-    await run_in_threadpool(send_whatsapp_message, phone, ai_reply)
-    save_message(db, phone, ai_reply, "outgoing")
-
     catalog_products = find_relevant_catalog_products(db, text)
     if catalog_products:
         lines = ["Catalog:"]
@@ -401,8 +392,13 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
                 )
                 db.commit()
 
+        event.status = "processed"
+        event.processed_at = datetime.utcnow()
+        db.commit()
+        return
+
     product_image = find_relevant_product_image(db, text)
-    if product_image and not catalog_products:
+    if product_image:
         try:
             await run_in_threadpool(
                 send_whatsapp_image,
@@ -432,6 +428,26 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
                 )
             )
             db.commit()
+            fallback_text = (
+                "Image send nahi ho payi, lekin product detail yeh hai:\n"
+                f"{product_image['caption']}"
+            )
+            await run_in_threadpool(send_whatsapp_message, phone, fallback_text)
+            save_message(db, phone, fallback_text, "outgoing")
+
+        event.status = "processed"
+        event.processed_at = datetime.utcnow()
+        db.commit()
+        return
+
+    ai_reply = agent_state["reply_override"] or generate_ai_reply(
+        db,
+        phone,
+        text,
+        agent_context=agent_state["context"],
+    )
+    await run_in_threadpool(send_whatsapp_message, phone, ai_reply)
+    save_message(db, phone, ai_reply, "outgoing")
 
     event.status = "processed"
     event.processed_at = datetime.utcnow()

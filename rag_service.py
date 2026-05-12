@@ -65,6 +65,10 @@ IMAGE_REQUEST_TERMS = {
     "img",
     "tasveer",
     "tasvir",
+    "dikha",
+    "dika",
+    "dikhai",
+    "dikhaye",
     "dikhana",
     "dikhao",
     "bhejo",
@@ -79,7 +83,28 @@ CATALOG_REQUEST_TERMS = {
     "items",
     "list",
     "menu",
+    "offering",
+    "offerings",
     "range",
+    "service",
+    "services",
+    "experience",
+    "experiences",
+}
+REQUEST_ACTION_TERMS = {
+    "bhejo",
+    "catalog",
+    "catalogue",
+    "de",
+    "dekhna",
+    "dikha",
+    "dika",
+    "dikhai",
+    "dikhana",
+    "dikhao",
+    "do",
+    "send",
+    "show",
 }
 
 
@@ -291,7 +316,7 @@ def is_image_request(query: str) -> bool:
 
 def is_catalog_request(query: str) -> bool:
     terms = set(_tokens(query))
-    return bool(terms & CATALOG_REQUEST_TERMS and terms & {"bhejo", "dikhao", "send", "show", "do", "de"})
+    return bool(terms & CATALOG_REQUEST_TERMS and terms & REQUEST_ACTION_TERMS)
 
 
 def _product_image_urls(product: EcommerceProduct) -> list[str]:
@@ -377,7 +402,12 @@ def find_relevant_product_image(db: Session, query: str) -> dict | None:
             best_product = product
 
     if not best_product or best_score <= 0:
-        return None
+        best_product = next(
+            (product for product in products if _product_image_urls(product)),
+            None,
+        )
+        if not best_product:
+            return None
 
     image_url = (_product_image_urls(best_product) or [None])[0]
     if not image_url:
