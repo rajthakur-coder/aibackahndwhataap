@@ -7,8 +7,11 @@ from app.api.routes import ROUTERS
 from app.core.config import settings
 from app.db.session import SessionLocal, engine
 from app.models.entities import Base
-from app.services.automations import automation_processor_loop, ensure_default_automation_rules
-from app.services.ecommerce_sync import ecommerce_auto_sync_loop
+from app.modules.automation.automation_service import (
+    automation_processor_loop,
+    ensure_default_automation_rules,
+)
+from app.modules.ecommerce.ecommerce_service import ecommerce_auto_sync_loop
 
 
 def create_app() -> FastAPI:

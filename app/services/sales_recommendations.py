@@ -4,7 +4,8 @@ from collections import Counter
 
 from sqlalchemy.orm import Session
 
-from app.models.entities import EcommerceProduct, StructuredProduct
+from app.models.ecommerce import EcommerceProduct
+from app.models.entities import StructuredProduct
 from app.services.intelligence import detect_query_intent
 
 

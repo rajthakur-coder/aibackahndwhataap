@@ -6,8 +6,9 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.db.session import get_db
-from app.models.entities import AgentAction, EcommerceConnection, EcommerceOrder, EcommerceProduct
-from app.schemas import (
+from app.models.entities import AgentAction
+from app.models.ecommerce import EcommerceConnection, EcommerceOrder, EcommerceProduct
+from app.modules.ecommerce.ecommerce_schema import (
     AbandonedCartRequest,
     DeliveredFollowupRequest,
     EcommerceConnectionRequest,
@@ -15,22 +16,23 @@ from app.schemas import (
     EcommerceProductSyncRequest,
     EcommerceSyncRequest,
 )
-from app.services.automations import (
+from app.modules.automation.automation_service import (
     create_abandoned_cart_event,
     enqueue_order_automation_events,
     process_automation_event,
     serialize_event,
 )
-from app.services.ecommerce import (
+from app.modules.ecommerce.ecommerce_service import (
     create_connection,
     send_delivered_followups,
+    sync_active_ecommerce_connections,
     sync_orders,
+    sync_product_catalog_knowledge,
     sync_products,
     test_connection,
     update_connection,
     upsert_order as upsert_ecommerce_order,
 )
-from app.services.ecommerce_sync import sync_active_ecommerce_connections, sync_product_catalog_knowledge
 from app.services.serializers import (
     serialize_ecommerce_connection,
     serialize_ecommerce_order,

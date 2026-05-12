@@ -1,6 +1,6 @@
 import json
 
-from app.models.entities import EcommerceConnection, EcommerceOrder, EcommerceProduct
+from app.models.ecommerce import EcommerceConnection, EcommerceOrder, EcommerceProduct
 
 
 def serialize_ecommerce_connection(connection: EcommerceConnection) -> dict:

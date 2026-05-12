@@ -9,13 +9,10 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.db.session import SessionLocal
+from app.models.automation import AutomationEvent, AutomationExecution, AutomationRule, MessageTemplate
+from app.models.ecommerce import EcommerceOrder
 from app.models.entities import (
     AgentAction,
-    AutomationEvent,
-    AutomationExecution,
-    AutomationRule,
-    EcommerceOrder,
-    MessageTemplate,
 )
 from app.services.messages import save_message
 from app.services.whatsapp import send_whatsapp_message, send_whatsapp_template

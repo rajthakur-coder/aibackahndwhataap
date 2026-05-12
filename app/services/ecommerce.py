@@ -6,7 +6,8 @@ import requests
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
-from app.models.entities import AgentAction, EcommerceConnection, EcommerceOrder, EcommerceProduct
+from app.models.ecommerce import EcommerceConnection, EcommerceOrder, EcommerceProduct
+from app.models.entities import AgentAction
 REQUEST_TIMEOUT = 30
 SHOPIFY_API_VERSION = "2025-04"
 SUPPORTED_PLATFORMS = {"shopify", "woocommerce"}
@@ -573,7 +574,7 @@ def is_delivered_order(order: EcommerceOrder) -> bool:
 
 
 def send_delivered_followups(db: Session, limit: int = 25) -> dict:
-    from app.services.automations import (
+    from app.modules.automation.automation_service import (
         TRIGGER_ORDER_DELIVERED,
         enqueue_order_automation_events,
         process_automation_event,

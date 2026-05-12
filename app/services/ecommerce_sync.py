@@ -6,7 +6,8 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.models.entities import AgentAction, EcommerceConnection, EcommerceProduct, KnowledgeDocument
+from app.models.ecommerce import EcommerceConnection, EcommerceProduct
+from app.models.entities import AgentAction, KnowledgeDocument
 from app.services.ecommerce import product_knowledge_text, sync_orders, sync_products
 from app.services.rag import save_knowledge_chunks, save_knowledge_document
 

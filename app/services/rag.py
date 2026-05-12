@@ -9,8 +9,8 @@ import requests
 from sqlalchemy.orm import Session
 
 from app.services.ecommerce import product_knowledge_text
+from app.models.ecommerce import EcommerceProduct
 from app.models.entities import (
-    EcommerceProduct,
     FAQ,
     KnowledgeChunk,
     KnowledgeDocument,

@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, String, Text
 
+from app.db.mixins import TimestampMixin
 from app.db.session import Base
 
 
@@ -136,7 +137,7 @@ class OrderStatus(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class EcommerceConnection(Base):
+class EcommerceConnection(TimestampMixin, Base):
     __tablename__ = "ecommerce_connections"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -148,11 +149,9 @@ class EcommerceConnection(Base):
     consumer_secret = Column(Text, nullable=True)
     status = Column(String, default="active")
     last_sync_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class EcommerceOrder(Base):
+class EcommerceOrder(TimestampMixin, Base):
     __tablename__ = "ecommerce_orders"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -173,11 +172,9 @@ class EcommerceOrder(Base):
     items = Column(Text, nullable=True)
     raw_payload = Column(Text, nullable=True)
     delivered_message_sent_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class EcommerceProduct(Base):
+class EcommerceProduct(TimestampMixin, Base):
     __tablename__ = "ecommerce_products"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -199,8 +196,6 @@ class EcommerceProduct(Base):
     inventory = Column(String, nullable=True)
     image_urls = Column(Text, nullable=True)
     raw_payload = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class HandoffTicket(Base):
@@ -227,7 +222,7 @@ class AgentAction(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class MessageTemplate(Base):
+class MessageTemplate(TimestampMixin, Base):
     __tablename__ = "message_templates"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -239,11 +234,9 @@ class MessageTemplate(Base):
     language = Column(String, default="en")
     body_variable_order = Column(Text, nullable=True)
     status = Column(String, default="active", index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class AutomationRule(Base):
+class AutomationRule(TimestampMixin, Base):
     __tablename__ = "automation_rules"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -254,11 +247,9 @@ class AutomationRule(Base):
     delay_seconds = Column(Integer, default=0)
     conditions = Column(Text, nullable=True)
     enabled = Column(String, default="true", index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class AutomationEvent(Base):
+class AutomationEvent(TimestampMixin, Base):
     __tablename__ = "automation_events"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -271,11 +262,9 @@ class AutomationEvent(Base):
     scheduled_for = Column(DateTime, default=datetime.utcnow, index=True)
     processed_at = Column(DateTime, nullable=True)
     error = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class AutomationExecution(Base):
+class AutomationExecution(TimestampMixin, Base):
     __tablename__ = "automation_executions"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -286,7 +275,6 @@ class AutomationExecution(Base):
     rendered_message = Column(Text, nullable=True)
     provider_response = Column(Text, nullable=True)
     error = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
     sent_at = Column(DateTime, nullable=True)
 
 
