@@ -175,6 +175,7 @@ def upsert_chunks(chunks: list[dict]) -> int:
         )
 
     for chunk, embedding in zip(chunks, embeddings):
+        extra_metadata = chunk.get("metadata") or {}
         metadata = {
             "source_type": chunk["source_type"],
             "source": chunk.get("source") or "",
@@ -182,6 +183,11 @@ def upsert_chunks(chunks: list[dict]) -> int:
             "content": chunk["content"],
             "chunk_index": chunk["chunk_index"],
             "document_id": str(chunk["document_id"]),
+            "page_type": extra_metadata.get("page_type", ""),
+            "category": extra_metadata.get("category", ""),
+            "price": extra_metadata.get("price", ""),
+            "brand": extra_metadata.get("brand", ""),
+            "section": extra_metadata.get("section", ""),
         }
         vectors.append(
             {
@@ -196,9 +202,9 @@ def upsert_chunks(chunks: list[dict]) -> int:
     return len(vectors)
 
 
-def query_context(query: str, top_k: int = 5, max_chars: int = 6000) -> str:
+def query_matches(query: str, top_k: int = 20) -> list[dict]:
     if not query.strip() or not ensure_index():
-        return ""
+        return []
 
     embedding = embed_texts([query])[0]
     result = _index().query(
@@ -209,14 +215,37 @@ def query_context(query: str, top_k: int = 5, max_chars: int = 6000) -> str:
     )
 
     matches = result.get("matches", []) if isinstance(result, dict) else getattr(result, "matches", [])
-    sections = []
+    normalized_matches = []
     for match in matches:
         metadata = match.get("metadata", {}) if isinstance(match, dict) else getattr(match, "metadata", {})
+        score = match.get("score", 0.0) if isinstance(match, dict) else getattr(match, "score", 0.0)
         content = metadata.get("content")
         if not content:
             continue
-        source = metadata.get("source") or metadata.get("title") or "Knowledge base"
-        sections.append(f"Source: {source}\n{content}")
+        normalized_matches.append(
+            {
+                "score": score or 0.0,
+                "content": content,
+                "source": metadata.get("source") or metadata.get("title") or "Knowledge base",
+                "metadata": metadata,
+            }
+        )
+    return normalized_matches
+
+
+def query_context(query: str, top_k: int = 5, max_chars: int = 6000) -> str:
+    matches = query_matches(query, top_k=top_k)
+    sections = []
+    for match in matches:
+        metadata = match["metadata"]
+        source = match["source"]
+        context_metadata = {
+            key: metadata.get(key)
+            for key in ("page_type", "category", "price", "brand", "section")
+            if metadata.get(key)
+        }
+        metadata_line = f"Metadata: {context_metadata}\n" if context_metadata else ""
+        sections.append(f"Source: {source}\n{metadata_line}{match['content']}")
 
     return "\n\n".join(sections)[:max_chars]
 
@@ -250,3 +279,4 @@ def status() -> dict:
             "ready": False,
             "error": str(exc),
         }
+

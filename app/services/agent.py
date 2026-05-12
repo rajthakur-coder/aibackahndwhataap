@@ -4,8 +4,9 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from ecommerce_service import find_order_for_customer, order_status_text
-from models import (
+from app.services.ecommerce import find_order_for_customer, order_status_text
+from app.services.intelligence import detect_query_intent
+from app.models.entities import (
     AgentAction,
     Appointment,
     CustomerMemory,
@@ -83,6 +84,18 @@ def _words(text: str) -> set[str]:
 
 
 def detect_intent(message: str) -> str:
+    query_intent = detect_query_intent(message)
+    if query_intent.name == "tracking_question":
+        return "order_status"
+    if query_intent.name == "price_question":
+        return "pricing"
+    if query_intent.name == "policy_question":
+        return "policy_question"
+    if query_intent.name == "catalog_request":
+        return "catalog_request"
+    if query_intent.name == "image_request":
+        return "image_request"
+
     text = message.lower()
     words = _words(message)
     best_intent = "general"
@@ -303,6 +316,7 @@ def get_customer_context(db: Session, phone: str) -> str:
 
 def process_agent_message(db: Session, phone: str, message: str) -> dict:
     intent = detect_intent(message)
+    query_intent = detect_query_intent(message)
     name = _extract_name(message)
     email = _extract_email(message)
     order_id = _extract_order_id(message)
@@ -386,6 +400,8 @@ def process_agent_message(db: Session, phone: str, message: str) -> dict:
 
     return {
         "intent": intent,
+        "query_intent": query_intent.name,
+        "policy_type": query_intent.policy_type,
         "name": profile.name,
         "email": profile.email,
         "reply_override": reply_override,
@@ -411,3 +427,4 @@ def log_payment_link_request(db: Session, phone: str, payload: dict) -> AgentAct
         payload=payload,
         result={"status": "configure_gateway_to_send_real_links"},
     )
+

@@ -6,8 +6,8 @@ import requests
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
-from models import AgentAction, EcommerceConnection, EcommerceOrder, EcommerceProduct
-from whatsapp_service import send_whatsapp_message
+from app.models.entities import AgentAction, EcommerceConnection, EcommerceOrder, EcommerceProduct
+from app.services.whatsapp import send_whatsapp_message
 
 
 REQUEST_TIMEOUT = 30
@@ -622,3 +622,4 @@ def send_delivered_followups(db: Session, limit: int = 25) -> dict:
         sent += 1
 
     return {"status": "success", "sent": sent, "skipped": skipped}
+

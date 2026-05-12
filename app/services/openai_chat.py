@@ -3,8 +3,8 @@ import os
 import requests
 from sqlalchemy.orm import Session
 
-from models import Message, ScrapedData
-from rag_service import retrieve_relevant_context
+from app.models.entities import Message, ScrapedData
+from app.services.rag import retrieve_relevant_context
 
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -100,3 +100,4 @@ def generate_ai_reply(
     data = response.json()
     reply = data["choices"][0]["message"]["content"].strip()
     return reply[:MAX_REPLY_CHARS]
+
