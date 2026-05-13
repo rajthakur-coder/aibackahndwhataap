@@ -104,6 +104,32 @@ def create_connection(
     if platform == "woocommerce" and (not consumer_key or not consumer_secret):
         raise ValueError("WooCommerce consumer key and consumer secret are required")
 
+    existing = (
+        db.query(EcommerceConnection)
+        .filter(
+            EcommerceConnection.platform == platform,
+            EcommerceConnection.store_url == store_url,
+        )
+        .first()
+    )
+    if existing:
+        existing.name = name.strip() or existing.name or store_url
+        existing.status = "active"
+        if platform == "shopify":
+            existing.myshopify_domain = existing.myshopify_domain or store_url
+        if access_token:
+            existing.access_token = access_token
+            existing.encrypted_access_token = _encrypt_token(access_token)
+        if consumer_key:
+            existing.consumer_key = consumer_key
+        if consumer_secret:
+            existing.consumer_secret = consumer_secret
+        db.commit()
+        db.refresh(existing)
+        if platform == "shopify":
+            bootstrap_shopify_connection(db, existing)
+        return existing
+
     connection = EcommerceConnection(
         name=name.strip() or store_url,
         platform=platform,
@@ -579,15 +605,6 @@ def bootstrap_shopify_connection(db: Session, connection: EcommerceConnection) -
         result["test"] = test_connection(connection)
         db.commit()
         db.refresh(connection)
-        result["orders"] = sync_orders(db, connection, 50)
-        result["products"] = sync_products(db, connection, 100)
-        result["customers"] = sync_customers(db, connection, 100)
-        from app.services.ecommerce_sync import sync_product_catalog_knowledge
-
-        result["knowledge"] = sync_product_catalog_knowledge(db, connection, 100)
-        result["webhooks"] = register_shopify_webhooks(db, connection)
-        connection.status = "active"
-        db.commit()
     except Exception as exc:
         connection.status = "failed"
         db.add(
@@ -600,6 +617,60 @@ def bootstrap_shopify_connection(db: Session, connection: EcommerceConnection) -
         )
         db.commit()
         raise
+
+    bootstrap_steps = [
+        ("orders", lambda: sync_orders(db, connection, 50)),
+        ("products", lambda: sync_products(db, connection, 100)),
+        ("customers", lambda: sync_customers(db, connection, 100)),
+    ]
+    for step_name, step in bootstrap_steps:
+        try:
+            result[step_name] = step()
+        except Exception as exc:
+            result[step_name] = {"status": "skipped", "error": str(exc)}
+            db.add(
+                AgentAction(
+                    action_type=f"shopify_bootstrap_{step_name}_skipped",
+                    status="skipped",
+                    payload=_json_dumps({"connection_id": connection.id}),
+                    result=_json_dumps({"error": str(exc)}),
+                )
+            )
+            db.commit()
+
+    try:
+        from app.services.ecommerce_sync import sync_product_catalog_knowledge
+
+        result["knowledge"] = sync_product_catalog_knowledge(db, connection, 100)
+    except Exception as exc:
+        result["knowledge"] = {"status": "skipped", "error": str(exc)}
+        db.add(
+            AgentAction(
+                action_type="shopify_bootstrap_knowledge_skipped",
+                status="skipped",
+                payload=_json_dumps({"connection_id": connection.id}),
+                result=_json_dumps({"error": str(exc)}),
+            )
+        )
+        db.commit()
+
+    try:
+        result["webhooks"] = register_shopify_webhooks(db, connection)
+    except Exception as exc:
+        result["webhooks"] = {"status": "skipped", "error": str(exc)}
+        connection.webhook_status = "failed"
+        db.add(
+            AgentAction(
+                action_type="shopify_bootstrap_webhooks_skipped",
+                status="skipped",
+                payload=_json_dumps({"connection_id": connection.id}),
+                result=_json_dumps({"error": str(exc)}),
+            )
+        )
+        db.commit()
+
+    connection.status = "active"
+    db.commit()
     return result
 
 
