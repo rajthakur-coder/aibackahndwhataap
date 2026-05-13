@@ -28,8 +28,10 @@ IMPORTANT_PATH_KEYWORDS = (
     "catalog",
     "collection",
     "contact",
+    "delivery",
     "faq",
     "help",
+    "payment",
     "policy",
     "privacy",
     "product",
@@ -37,7 +39,59 @@ IMPORTANT_PATH_KEYWORDS = (
     "return",
     "shipping",
     "shop",
+    "service",
     "terms",
+    "track",
+)
+LOW_VALUE_PATH_KEYWORDS = (
+    "account",
+    "author",
+    "blog",
+    "cart",
+    "checkout",
+    "login",
+    "logout",
+    "news",
+    "page=",
+    "password",
+    "register",
+    "search",
+    "tag",
+    "wishlist",
+)
+BUSINESS_SECTION_KEYWORDS = (
+    "about",
+    "address",
+    "available",
+    "brand",
+    "cod",
+    "contact",
+    "delivery",
+    "description",
+    "exchange",
+    "faq",
+    "feature",
+    "fulfillment",
+    "guarantee",
+    "help",
+    "inventory",
+    "material",
+    "payment",
+    "phone",
+    "policy",
+    "price",
+    "privacy",
+    "product",
+    "refund",
+    "return",
+    "shipping",
+    "size",
+    "sku",
+    "stock",
+    "support",
+    "terms",
+    "track",
+    "warranty",
 )
 PAGE_TYPE_KEYWORDS = {
     "product": ("product", "products", "shop", "item"),
@@ -45,8 +99,10 @@ PAGE_TYPE_KEYWORDS = {
     "faq": ("faq", "help", "support"),
     "policy": ("policy", "privacy", "terms", "refund", "return", "shipping"),
     "contact": ("contact",),
+    "service": ("service", "services", "package", "plan"),
     "about": ("about",),
 }
+BUSINESS_PAGE_TYPES = {"product", "collection", "faq", "policy", "contact", "service", "about"}
 
 
 def _validate_url(url: str) -> None:
@@ -72,7 +128,9 @@ def _is_http_url(url: str) -> bool:
 
 def _score_url(url: str) -> int:
     path = urlparse(url).path.lower()
-    return sum(1 for keyword in IMPORTANT_PATH_KEYWORDS if keyword in path)
+    score = sum(1 for keyword in IMPORTANT_PATH_KEYWORDS if keyword in path)
+    score -= sum(2 for keyword in LOW_VALUE_PATH_KEYWORDS if keyword in path)
+    return score
 
 
 def _page_type(url: str) -> str:
@@ -81,6 +139,24 @@ def _page_type(url: str) -> str:
         if any(keyword in path for keyword in keywords):
             return page_type
     return "general"
+
+
+def _is_low_value_url(url: str) -> bool:
+    parsed = urlparse(url)
+    path_and_query = f"{parsed.path}?{parsed.query}".lower()
+    if any(keyword in path_and_query for keyword in LOW_VALUE_PATH_KEYWORDS):
+        return True
+    if parsed.query and _score_url(url) <= 0:
+        return True
+    return False
+
+
+def _is_business_url(url: str, is_root: bool = False) -> bool:
+    if is_root:
+        return True
+    if _is_low_value_url(url):
+        return False
+    return _page_type(url) in BUSINESS_PAGE_TYPES or _score_url(url) > 0
 
 
 def _category_from_url(url: str) -> str:
@@ -174,6 +250,9 @@ def _extract_sections(soup: BeautifulSoup) -> list[dict]:
         text = tag.get_text(separator="\n", strip=True)
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         section_text = "\n".join(lines)[:MAX_SECTION_CHARS]
+        searchable = f"{title}\n{section_text}".lower()
+        if not any(keyword in searchable for keyword in BUSINESS_SECTION_KEYWORDS):
+            continue
         text_key = re.sub(r"\s+", " ", section_text.lower())[:500]
         if len(section_text) < 30 or text_key in seen_text:
             continue
@@ -253,7 +332,10 @@ def _extract_page(url: str, html: str) -> dict:
     page_metadata = _page_metadata(url, soup, title, page_text, json_ld)
     sections = _extract_sections(soup)
     if not sections:
-        sections = [{"heading": "Page content", "text": page_text[:MAX_SECTION_CHARS]}]
+        if page_metadata["page_type"] in BUSINESS_PAGE_TYPES:
+            sections = [{"heading": "Page content", "text": page_text[:MAX_SECTION_CHARS]}]
+        else:
+            sections = []
 
     metadata_lines = [
         f"Page URL: {url}",
@@ -297,15 +379,16 @@ def crawl_website(url: str, max_pages: int = MAX_PAGES) -> list[dict]:
     root_netloc = urlparse(root_url).netloc
 
     queue = deque([root_url])
-    for sitemap_url in _sitemap_urls(root_url, root_netloc, max_pages):
-        if sitemap_url != root_url:
+    for sitemap_url in _sitemap_urls(root_url, root_netloc, max_pages * 3):
+        if sitemap_url != root_url and _is_business_url(sitemap_url):
             queue.append(sitemap_url)
 
     seen = set()
     pages = []
     while queue and len(pages) < max_pages:
         current = queue.popleft()
-        if current in seen or not _same_domain(current, root_netloc):
+        is_root = current == root_url
+        if current in seen or not _same_domain(current, root_netloc) or not _is_business_url(current, is_root=is_root):
             continue
         seen.add(current)
 
@@ -319,12 +402,13 @@ def crawl_website(url: str, max_pages: int = MAX_PAGES) -> list[dict]:
             continue
 
         page = _extract_page(current, response.text)
-        pages.append(page)
+        if page["sections"] or page["metadata"]["page_type"] in BUSINESS_PAGE_TYPES:
+            pages.append(page)
 
         internal_links = [
             link
             for link in page["links"]
-            if link not in seen and _same_domain(link, root_netloc)
+            if link not in seen and _same_domain(link, root_netloc) and _is_business_url(link)
         ]
         internal_links = sorted(set(internal_links), key=lambda item: (-_score_url(item), item))
         queue.extend(internal_links[:MAX_LINKS_PER_PAGE])

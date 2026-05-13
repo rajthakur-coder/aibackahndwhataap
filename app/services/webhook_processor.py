@@ -6,6 +6,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.models.entities import AgentAction, WebhookEvent
 from app.services.agent import process_agent_message
+from app.services.ai_tools import decide_tool_for_message, run_ai_tool
 from app.services.conversation_memory import remember_last_products, remember_last_question
 from app.services.messages import save_message
 from app.services.openai_chat import generate_ai_reply
@@ -264,12 +265,35 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         _mark_processed(db, event)
         return
 
-    ai_reply = agent_state["reply_override"] or generate_ai_reply(
-        db,
-        phone,
-        text,
-        agent_context=agent_state["context"],
-    )
+    ai_reply = agent_state["reply_override"]
+    if not ai_reply:
+        tool_decision = decide_tool_for_message(text)
+        tool_result = run_ai_tool(db, phone, text, tool_decision)
+        db.add(
+            AgentAction(
+                phone=phone,
+                action_type="ai_tool_selected",
+                status="logged",
+                payload=json.dumps(
+                    {
+                        "message": text,
+                        "tool": tool_result["tool"],
+                        "reason": tool_result["reason"],
+                        "needs_rag": tool_result["needs_rag"],
+                    }
+                ),
+                result=json.dumps({"data_count": len(tool_result.get("data") or [])}),
+            )
+        )
+        db.commit()
+        ai_reply = generate_ai_reply(
+            db,
+            phone,
+            text,
+            agent_context=agent_state["context"],
+            tool_context=tool_result["context"],
+            use_rag_fallback=tool_result["needs_rag"],
+        )
     await run_in_threadpool(send_whatsapp_message, phone, ai_reply)
     save_message(db, phone, ai_reply, "outgoing")
     _mark_processed(db, event)

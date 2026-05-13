@@ -7,7 +7,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.db.session import get_db
 from app.models.entities import AgentAction
-from app.models.ecommerce import EcommerceConnection, EcommerceOrder, EcommerceProduct
+from app.models.ecommerce import EcommerceConnection, EcommerceCustomer, EcommerceOrder, EcommerceProduct
 from app.modules.ecommerce.ecommerce_schema import (
     AbandonedCartRequest,
     DeliveredFollowupRequest,
@@ -24,6 +24,9 @@ from app.modules.automation.automation_service import (
 )
 from app.modules.ecommerce.ecommerce_service import (
     create_connection,
+    find_shopify_connection_by_domain,
+    mark_shopify_webhook_event,
+    record_shopify_webhook_event,
     send_delivered_followups,
     sync_active_ecommerce_connections,
     sync_orders,
@@ -32,15 +35,19 @@ from app.modules.ecommerce.ecommerce_service import (
     test_connection,
     update_connection,
     upsert_order as upsert_ecommerce_order,
+    upsert_product,
+    verify_shopify_hmac,
 )
 from app.services.serializers import (
     serialize_ecommerce_connection,
+    serialize_ecommerce_customer,
     serialize_ecommerce_order,
     serialize_ecommerce_product,
 )
 
 
 router = APIRouter(prefix="/ecommerce", tags=["ecommerce"])
+webhooks_router = APIRouter(prefix="/webhooks/shopify", tags=["shopify-webhooks"])
 
 
 @router.post("/connections")
@@ -166,6 +173,157 @@ def list_ecommerce_products(
 @router.post("/sync-active")
 async def sync_all_active_ecommerce_connections():
     return await run_in_threadpool(sync_active_ecommerce_connections)
+
+
+async def _shopify_webhook_context(request: Request, db: Session) -> tuple[EcommerceConnection, dict, object]:
+    raw_body = await request.body()
+    if not verify_shopify_hmac(raw_body, request.headers.get("X-Shopify-Hmac-Sha256")):
+        raise HTTPException(status_code=401, detail="Invalid Shopify webhook signature")
+
+    shop_domain = request.headers.get("X-Shopify-Shop-Domain")
+    topic = request.headers.get("X-Shopify-Topic") or "unknown"
+    if not shop_domain:
+        raise HTTPException(status_code=400, detail="X-Shopify-Shop-Domain header is required")
+
+    connection = find_shopify_connection_by_domain(db, shop_domain)
+    if not connection:
+        raise HTTPException(status_code=404, detail="Shopify ecommerce connection not found")
+
+    event, already_processed = record_shopify_webhook_event(
+        db,
+        connection,
+        shop_domain,
+        topic,
+        request.headers.get("X-Shopify-Webhook-Id"),
+        raw_body,
+    )
+    if already_processed:
+        return connection, {"_duplicate": True}, event
+
+    try:
+        body = json.loads(raw_body.decode("utf-8"))
+    except Exception as exc:
+        mark_shopify_webhook_event(db, event, "failed", str(exc))
+        raise HTTPException(status_code=400, detail="Invalid Shopify webhook JSON") from exc
+    return connection, body, event
+
+
+@webhooks_router.post("/orders")
+async def shopify_orders_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    connection, body, event = await _shopify_webhook_context(request, db)
+    if body.get("_duplicate"):
+        return {"status": "ignored", "reason": "duplicate"}
+
+    order_payload = body.get("order") if isinstance(body, dict) and isinstance(body.get("order"), dict) else body
+    try:
+        order = upsert_ecommerce_order(db, connection, order_payload)
+    except Exception as exc:
+        db.add(
+            AgentAction(
+                action_type="shopify_order_webhook_failed",
+                status="failed",
+                payload=json.dumps({"shop_domain": connection.store_url, "connection_id": connection.id}),
+                result=json.dumps({"error": str(exc)}),
+            )
+        )
+        db.commit()
+        mark_shopify_webhook_event(db, event, "failed", str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    automation_results = []
+    try:
+        events = enqueue_order_automation_events(db, order, source="shopify_webhook")
+        automation_results = [process_automation_event(db, event) for event in events]
+    except Exception as exc:
+        db.add(
+            AgentAction(
+                phone=order.phone,
+                action_type="shopify_order_automation_failed",
+                status="failed",
+                payload=json.dumps(
+                    {
+                        "shop_domain": connection.store_url,
+                        "connection_id": connection.id,
+                        "order_id": order.order_number,
+                    }
+                ),
+                result=json.dumps({"error": str(exc)}),
+            )
+        )
+        db.commit()
+
+    mark_shopify_webhook_event(db, event, "processed")
+    return {
+        "status": "success",
+        "order": serialize_ecommerce_order(order),
+        "automations": automation_results,
+    }
+
+
+@webhooks_router.post("/products")
+async def shopify_products_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    connection, body, event = await _shopify_webhook_context(request, db)
+    if body.get("_duplicate"):
+        return {"status": "ignored", "reason": "duplicate"}
+    product_payload = body.get("product") if isinstance(body, dict) and isinstance(body.get("product"), dict) else body
+    try:
+        product = upsert_product(db, connection, product_payload)
+        sync_product_catalog_knowledge(db, connection, 250)
+        mark_shopify_webhook_event(db, event, "processed")
+        return {"status": "success", "product": serialize_ecommerce_product(product)}
+    except Exception as exc:
+        mark_shopify_webhook_event(db, event, "failed", str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@webhooks_router.post("/fulfillments")
+async def shopify_fulfillments_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    connection, body, event = await _shopify_webhook_context(request, db)
+    if body.get("_duplicate"):
+        return {"status": "ignored", "reason": "duplicate"}
+    order_id = str(body.get("order_id") or body.get("order") or "")
+    order = (
+        db.query(EcommerceOrder)
+        .filter(
+            EcommerceOrder.connection_id == connection.id,
+            EcommerceOrder.external_id == order_id,
+        )
+        .first()
+    )
+    if not order:
+        mark_shopify_webhook_event(db, event, "processed")
+        return {"status": "accepted", "reason": "order_not_synced_yet"}
+
+    tracking_number = body.get("tracking_number")
+    tracking_url = body.get("tracking_url")
+    if tracking_number:
+        order.tracking_number = tracking_number
+    if tracking_url:
+        order.tracking_url = tracking_url
+    order.courier_company = body.get("tracking_company") or order.courier_company
+    order.shipment_status = body.get("shipment_status") or body.get("status") or order.shipment_status
+    order.fulfillment_status = "fulfilled"
+    order.raw_payload = json.dumps({**(json.loads(order.raw_payload or "{}")), "latest_fulfillment": body})
+    db.commit()
+    db.refresh(order)
+
+    events = enqueue_order_automation_events(db, order, source="shopify_webhook")
+    automation_results = [process_automation_event(db, event_row) for event_row in events]
+    mark_shopify_webhook_event(db, event, "processed")
+    return {
+        "status": "success",
+        "order": serialize_ecommerce_order(order),
+        "automations": automation_results,
+    }
 
 
 @router.post("/connections/{connection_id}/webhook/order")
@@ -328,6 +486,24 @@ def get_ecommerce_order(order_id: str, db: Session = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="Ecommerce order not found")
     return serialize_ecommerce_order(row)
+
+
+@router.get("/customers")
+def list_ecommerce_customers(
+    connection_id: int | None = None,
+    phone: str | None = None,
+    email: str | None = None,
+    db: Session = Depends(get_db),
+):
+    query = db.query(EcommerceCustomer)
+    if connection_id is not None:
+        query = query.filter(EcommerceCustomer.connection_id == connection_id)
+    if phone:
+        query = query.filter(EcommerceCustomer.phone == phone)
+    if email:
+        query = query.filter(EcommerceCustomer.email == email)
+    rows = query.order_by(EcommerceCustomer.updated_at.desc()).limit(200).all()
+    return [serialize_ecommerce_customer(row) for row in rows]
 
 
 @router.post("/automations/delivered-followups")

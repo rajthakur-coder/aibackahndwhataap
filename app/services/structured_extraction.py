@@ -143,7 +143,10 @@ def _extract_with_ai(url: str, content: str) -> dict | None:
                     {
                         "role": "system",
                         "content": (
-                            "Extract structured business data from website text. "
+                            "Extract only business data useful for WhatsApp ecommerce automation. "
+                            "Focus on products, prices, variants, inventory hints, FAQs, return/refund/shipping/payment/COD policies, "
+                            "services/packages, contact/support details, delivery timelines, warranty, and tracking guidance. "
+                            "Ignore blogs, generic marketing fluff, navigation text, duplicate menus, and unrelated content. "
                             "Return only JSON with keys products, faqs, policies, services. "
                             "Do not invent missing data."
                         ),

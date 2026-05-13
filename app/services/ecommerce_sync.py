@@ -6,9 +6,9 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.models.ecommerce import EcommerceConnection, EcommerceProduct
+from app.models.ecommerce import EcommerceConnection, EcommerceProduct, ShopifyWebhookEvent
 from app.models.entities import AgentAction, KnowledgeDocument
-from app.services.ecommerce import product_knowledge_text, sync_orders, sync_products
+from app.services.ecommerce import product_knowledge_text, sync_customers, sync_orders, sync_products
 from app.services.rag import save_knowledge_chunks, save_knowledge_document
 
 
@@ -76,6 +76,8 @@ def sync_active_ecommerce_connections() -> dict:
                         )
                     )
                     result["products"] = product_result
+                if connection.platform == "shopify":
+                    result["customers"] = sync_customers(db, connection, settings.ecommerce_auto_sync_limit)
                 synced += result.get("synced", 0)
                 results.append({"connection_id": connection.id, **result})
             except Exception as exc:
@@ -108,8 +110,29 @@ def sync_active_ecommerce_connections() -> dict:
         db.close()
 
 
+def retry_failed_shopify_webhooks(limit: int = 25) -> dict:
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(ShopifyWebhookEvent)
+            .filter(ShopifyWebhookEvent.status == "failed", ShopifyWebhookEvent.attempts < 5)
+            .order_by(ShopifyWebhookEvent.updated_at.asc())
+            .limit(max(1, min(limit, 100)))
+            .all()
+        )
+        for row in rows:
+            row.status = "pending"
+            row.attempts = (row.attempts or 0) + 1
+            row.error = None
+        db.commit()
+        return {"status": "queued", "webhooks": len(rows)}
+    finally:
+        db.close()
+
+
 async def ecommerce_auto_sync_loop() -> None:
     await asyncio.sleep(5)
     while settings.ecommerce_auto_sync_enabled:
         await run_in_threadpool(sync_active_ecommerce_connections)
+        await run_in_threadpool(retry_failed_shopify_webhooks)
         await asyncio.sleep(settings.ecommerce_auto_sync_interval_seconds)

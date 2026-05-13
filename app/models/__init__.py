@@ -11,6 +11,7 @@ from app.models.entities import (
     CustomerMemory,
     CustomerProfile,
     EcommerceConnection,
+    EcommerceCustomer,
     EcommerceOrder,
     EcommerceProduct,
     FAQ,
@@ -26,6 +27,7 @@ from app.models.entities import (
     ScrapedData,
     Service,
     StructuredProduct,
+    ShopifyWebhookEvent,
     WebhookEvent,
 )
 
@@ -40,6 +42,7 @@ __all__ = [
     "CustomerMemory",
     "CustomerProfile",
     "EcommerceConnection",
+    "EcommerceCustomer",
     "EcommerceOrder",
     "EcommerceProduct",
     "FAQ",
@@ -55,5 +58,6 @@ __all__ = [
     "ScrapedData",
     "Service",
     "StructuredProduct",
+    "ShopifyWebhookEvent",
     "WebhookEvent",
 ]

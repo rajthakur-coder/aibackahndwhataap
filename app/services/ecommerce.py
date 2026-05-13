@@ -1,17 +1,36 @@
 import json
+import base64
+import hashlib
+import hmac
+import time
 from datetime import datetime
 from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from requests.utils import parse_header_links
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.ecommerce import EcommerceConnection, EcommerceOrder, EcommerceProduct
-from app.models.entities import AgentAction
+from app.models.entities import AgentAction, EcommerceCustomer, ShopifyWebhookEvent
+try:
+    from cryptography.fernet import Fernet
+except ImportError:  # pragma: no cover - dependency is declared for production installs.
+    Fernet = None
+
 REQUEST_TIMEOUT = 30
 SHOPIFY_API_VERSION = "2025-04"
 SUPPORTED_PLATFORMS = {"shopify", "woocommerce"}
 DELIVERED_STATUSES = {"delivered"}
+SHOPIFY_WEBHOOK_TOPICS = {
+    "orders/create": "/webhooks/shopify/orders",
+    "orders/updated": "/webhooks/shopify/orders",
+    "fulfillments/create": "/webhooks/shopify/fulfillments",
+    "fulfillments/update": "/webhooks/shopify/fulfillments",
+    "products/create": "/webhooks/shopify/products",
+    "products/update": "/webhooks/shopify/products",
+}
 
 
 def _clean_platform(platform: str) -> str:
@@ -35,6 +54,39 @@ def _normalize_store_url(store_url: str, platform: str) -> str:
     return value
 
 
+def _json_dumps(value) -> str:
+    return json.dumps(value, ensure_ascii=True)
+
+
+def _encrypt_token(token: str | None) -> str | None:
+    if not token:
+        return None
+    secret = settings.ecommerce_token_secret
+    if not secret or Fernet is None:
+        return token
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
+    return "fernet:" + Fernet(key).encrypt(token.encode()).decode()
+
+
+def _decrypt_token(token: str | None) -> str | None:
+    if not token:
+        return None
+    if token.startswith("fernet:"):
+        secret = settings.ecommerce_token_secret
+        if not secret or Fernet is None:
+            return token
+        key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
+        return Fernet(key).decrypt(token[7:].encode()).decode()
+    if not token.startswith("xor:"):
+        return token
+    secret = settings.ecommerce_token_secret
+    if not secret:
+        return token
+    key = hashlib.sha256(secret.encode()).digest()
+    data = base64.urlsafe_b64decode(token[4:].encode())
+    return bytes(char ^ key[index % len(key)] for index, char in enumerate(data)).decode()
+
+
 def create_connection(
     db: Session,
     name: str,
@@ -56,13 +108,17 @@ def create_connection(
         name=name.strip() or store_url,
         platform=platform,
         store_url=store_url,
+        myshopify_domain=store_url if platform == "shopify" else None,
         access_token=access_token,
+        encrypted_access_token=_encrypt_token(access_token),
         consumer_key=consumer_key,
         consumer_secret=consumer_secret,
     )
     db.add(connection)
     db.commit()
     db.refresh(connection)
+    if platform == "shopify":
+        bootstrap_shopify_connection(db, connection)
     return connection
 
 
@@ -82,6 +138,7 @@ def update_connection(
         connection.store_url = _normalize_store_url(store_url, connection.platform)
     if access_token:
         connection.access_token = access_token
+        connection.encrypted_access_token = _encrypt_token(access_token)
     if consumer_key:
         connection.consumer_key = consumer_key
     if consumer_secret:
@@ -96,13 +153,56 @@ def update_connection(
 
 def _shopify_headers(connection: EcommerceConnection) -> dict:
     return {
-        "X-Shopify-Access-Token": connection.access_token or "",
+        "X-Shopify-Access-Token": _decrypt_token(connection.encrypted_access_token) or connection.access_token or "",
         "Content-Type": "application/json",
     }
 
 
 def _shopify_base_url(connection: EcommerceConnection) -> str:
-    return f"https://{connection.store_url}/admin/api/{SHOPIFY_API_VERSION}"
+    domain = connection.myshopify_domain or connection.store_url
+    return f"https://{domain}/admin/api/{SHOPIFY_API_VERSION}"
+
+
+def _shopify_request(
+    method: str,
+    connection: EcommerceConnection,
+    path: str,
+    params: dict | None = None,
+    payload: dict | None = None,
+) -> requests.Response:
+    url = f"{_shopify_base_url(connection)}{path}"
+    for attempt in range(4):
+        response = requests.request(
+            method,
+            url,
+            headers=_shopify_headers(connection),
+            params=params,
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
+        )
+        if response.status_code != 429:
+            response.raise_for_status()
+            return response
+        retry_after = response.headers.get("Retry-After")
+        sleep_for = float(retry_after) if retry_after else min(2 ** attempt, 8)
+        time.sleep(sleep_for)
+    response.raise_for_status()
+    return response
+
+
+def _next_page_info(response: requests.Response) -> str | None:
+    link_header = response.headers.get("Link")
+    if not link_header:
+        return None
+    for link in parse_header_links(link_header.rstrip(">").replace(">,", ",")):
+        if link.get("rel") != "next":
+            continue
+        query = urlparse(link.get("url", "")).query
+        for part in query.split("&"):
+            key, _, value = part.partition("=")
+            if key == "page_info":
+                return value
+    return None
 
 
 def _woocommerce_base_url(connection: EcommerceConnection) -> str:
@@ -111,13 +211,20 @@ def _woocommerce_base_url(connection: EcommerceConnection) -> str:
 
 def test_connection(connection: EcommerceConnection) -> dict:
     if connection.platform == "shopify":
-        response = requests.get(
-            f"{_shopify_base_url(connection)}/shop.json",
-            headers=_shopify_headers(connection),
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
+        response = _shopify_request("GET", connection, "/shop.json")
         shop = response.json().get("shop", {})
+        connection.store_name = shop.get("name") or connection.store_name
+        connection.myshopify_domain = shop.get("myshopify_domain") or connection.myshopify_domain or connection.store_url
+        connection.shopify_shop_id = str(shop.get("id") or connection.shopify_shop_id or "")
+        connection.currency = shop.get("currency") or connection.currency
+        connection.timezone = shop.get("iana_timezone") or shop.get("timezone") or connection.timezone
+        connection.owner_email = shop.get("email") or connection.owner_email
+        connection.owner_phone = shop.get("phone") or connection.owner_phone
+        connection.plan_name = shop.get("plan_name") or connection.plan_name
+        connection.status = "active"
+        db_session = getattr(connection, "_sa_instance_state", None)
+        if db_session:
+            pass
         return {"ok": True, "platform": "shopify", "store": shop.get("name") or connection.store_url}
 
     response = requests.get(
@@ -133,18 +240,22 @@ def test_connection(connection: EcommerceConnection) -> dict:
 def fetch_orders(connection: EcommerceConnection, limit: int = 50) -> list[dict]:
     limit = max(1, min(limit, 100))
     if connection.platform == "shopify":
-        response = requests.get(
-            f"{_shopify_base_url(connection)}/orders.json",
-            headers=_shopify_headers(connection),
-            params={
+        orders = []
+        page_info = None
+        while len(orders) < limit:
+            params = {
                 "status": "any",
-                "limit": limit,
-                "fields": "id,name,email,phone,total_price,currency,financial_status,fulfillment_status,line_items,shipping_address,customer,fulfillments,created_at,updated_at",
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        return response.json().get("orders", [])
+                "limit": min(250, limit - len(orders)),
+                "fields": "id,name,email,phone,tags,note,subtotal_price,total_price,total_discounts,total_tax,currency,financial_status,fulfillment_status,line_items,shipping_address,billing_address,customer,fulfillments,payment_gateway_names,created_at,updated_at",
+            }
+            if page_info:
+                params = {"limit": min(250, limit - len(orders)), "page_info": page_info}
+            response = _shopify_request("GET", connection, "/orders.json", params=params)
+            orders.extend(response.json().get("orders", []))
+            page_info = _next_page_info(response)
+            if not page_info:
+                break
+        return orders[:limit]
 
     response = requests.get(
         f"{_woocommerce_base_url(connection)}/orders",
@@ -159,17 +270,21 @@ def fetch_orders(connection: EcommerceConnection, limit: int = 50) -> list[dict]
 def fetch_products(connection: EcommerceConnection, limit: int = 100) -> list[dict]:
     limit = max(1, min(limit, 250))
     if connection.platform == "shopify":
-        response = requests.get(
-            f"{_shopify_base_url(connection)}/products.json",
-            headers=_shopify_headers(connection),
-            params={
+        products = []
+        page_info = None
+        while len(products) < limit:
+            params = {
                 "limit": limit,
                 "fields": "id,title,handle,body_html,vendor,product_type,tags,status,variants,images,options,created_at,updated_at",
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        return response.json().get("products", [])
+            }
+            if page_info:
+                params = {"limit": min(250, limit - len(products)), "page_info": page_info}
+            response = _shopify_request("GET", connection, "/products.json", params=params)
+            products.extend(response.json().get("products", []))
+            page_info = _next_page_info(response)
+            if not page_info:
+                break
+        return products[:limit]
 
     response = requests.get(
         f"{_woocommerce_base_url(connection)}/products",
@@ -179,6 +294,27 @@ def fetch_products(connection: EcommerceConnection, limit: int = 100) -> list[di
     )
     response.raise_for_status()
     return response.json()
+
+
+def fetch_customers(connection: EcommerceConnection, limit: int = 100) -> list[dict]:
+    limit = max(1, min(limit, 250))
+    if connection.platform != "shopify":
+        return []
+    customers = []
+    page_info = None
+    while len(customers) < limit:
+        params = {
+            "limit": min(250, limit - len(customers)),
+            "fields": "id,email,phone,first_name,last_name,orders_count,total_spent,tags,addresses,default_address,email_marketing_consent,locale,created_at,updated_at",
+        }
+        if page_info:
+            params = {"limit": min(250, limit - len(customers)), "page_info": page_info}
+        response = _shopify_request("GET", connection, "/customers.json", params=params)
+        customers.extend(response.json().get("customers", []))
+        page_info = _next_page_info(response)
+        if not page_info:
+            break
+    return customers[:limit]
 
 
 def _plain_text(html: str | None) -> str:
@@ -217,19 +353,31 @@ def _normalize_shopify_product(connection: EcommerceConnection, product: dict) -
     handle = product.get("handle")
     return {
         "external_id": str(product.get("id")),
+        "shopify_product_id": str(product.get("id")),
         "title": product.get("title") or "Untitled product",
         "handle": handle,
         "product_url": f"https://{connection.store_url}/products/{handle}" if handle else None,
+        "description_html": product.get("body_html"),
         "description": _plain_text(product.get("body_html")),
         "vendor": product.get("vendor"),
         "product_type": product.get("product_type"),
         "tags": product.get("tags"),
+        "collections": [],
         "status": product.get("status"),
         "price_min": price_min,
         "price_max": price_max,
+        "prices": [variant.get("price") for variant in variants if variant.get("price")],
+        "compare_at_prices": [
+            variant.get("compare_at_price") for variant in variants if variant.get("compare_at_price")
+        ],
         "currency": None,
         "sku": ", ".join(skus[:10]) if skus else None,
+        "skus": skus,
         "inventory": ", ".join(inventory_values[:20]) if inventory_values else None,
+        "variants": variants,
+        "options": product.get("options") or [],
+        "seo_title": product.get("seo_title") or product.get("title"),
+        "seo_description": product.get("seo_description"),
         "image_urls": [image.get("src") for image in images if image.get("src")],
     }
 
@@ -250,19 +398,29 @@ def _normalize_woocommerce_product(connection: EcommerceConnection, product: dic
     categories = ", ".join(category.get("name", "") for category in product.get("categories", []) if category.get("name"))
     return {
         "external_id": str(product.get("id")),
+        "shopify_product_id": None,
         "title": product.get("name") or "Untitled product",
         "handle": product.get("slug"),
         "product_url": product.get("permalink"),
+        "description_html": product.get("description") or product.get("short_description"),
         "description": _plain_text(product.get("description") or product.get("short_description")),
         "vendor": None,
         "product_type": categories or product.get("type"),
         "tags": tags,
+        "collections": product.get("categories") or [],
         "status": product.get("status"),
         "price_min": price_min,
         "price_max": price_max,
+        "prices": [product.get("price")],
+        "compare_at_prices": [product.get("regular_price")],
         "currency": None,
         "sku": product.get("sku"),
+        "skus": [product.get("sku")] if product.get("sku") else [],
         "inventory": str(product.get("stock_quantity")) if product.get("stock_quantity") is not None else product.get("stock_status"),
+        "variants": variations[:20],
+        "options": product.get("attributes") or [],
+        "seo_title": product.get("name"),
+        "seo_description": None,
         "image_urls": [image.get("src") for image in images if image.get("src")],
         "variation_ids": variations[:20],
     }
@@ -286,6 +444,7 @@ def upsert_product(db: Session, connection: EcommerceConnection, product: dict) 
     )
     if not row:
         row = EcommerceProduct(
+            tenant_id=connection.tenant_id,
             connection_id=connection.id,
             platform=connection.platform,
             external_id=normalized["external_id"],
@@ -293,21 +452,32 @@ def upsert_product(db: Session, connection: EcommerceConnection, product: dict) 
         )
         db.add(row)
 
+    row.tenant_id = connection.tenant_id
+    row.shopify_product_id = normalized["shopify_product_id"]
     row.title = normalized["title"]
     row.handle = normalized["handle"]
     row.product_url = normalized["product_url"]
+    row.description_html = normalized["description_html"]
     row.description = normalized["description"]
     row.vendor = normalized["vendor"]
     row.product_type = normalized["product_type"]
     row.tags = normalized["tags"]
+    row.collections = _json_dumps(normalized["collections"])
     row.status = normalized["status"]
     row.price_min = normalized["price_min"]
     row.price_max = normalized["price_max"]
+    row.prices = _json_dumps(normalized["prices"])
+    row.compare_at_prices = _json_dumps(normalized["compare_at_prices"])
     row.currency = normalized["currency"]
     row.sku = normalized["sku"]
+    row.skus = _json_dumps(normalized["skus"])
     row.inventory = normalized["inventory"]
-    row.image_urls = json.dumps(normalized["image_urls"])
-    row.raw_payload = json.dumps(product)
+    row.variants = _json_dumps(normalized["variants"])
+    row.options = _json_dumps(normalized["options"])
+    row.seo_title = normalized["seo_title"]
+    row.seo_description = normalized["seo_description"]
+    row.image_urls = _json_dumps(normalized["image_urls"])
+    row.raw_payload = _json_dumps(product)
     db.commit()
     db.refresh(row)
     return row
@@ -350,6 +520,89 @@ def sync_products(db: Session, connection: EcommerceConnection, limit: int = 100
     return {"status": "success", "fetched": len(products), "synced": len(synced)}
 
 
+def sync_customers(db: Session, connection: EcommerceConnection, limit: int = 100) -> dict:
+    customers = fetch_customers(connection, limit=limit)
+    synced = [upsert_customer(db, connection, customer) for customer in customers]
+    connection.last_sync_at = datetime.utcnow()
+    db.commit()
+    return {"status": "success", "fetched": len(customers), "synced": len([row for row in synced if row])}
+
+
+def register_shopify_webhooks(db: Session, connection: EcommerceConnection) -> dict:
+    if connection.platform != "shopify":
+        return {"status": "skipped", "reason": "not_shopify"}
+    base_url = settings.public_webhook_base_url
+    if not base_url:
+        connection.webhook_status = "missing_public_url"
+        db.commit()
+        return {"status": "skipped", "reason": "PUBLIC_WEBHOOK_BASE_URL or APP_URL is required"}
+
+    registered = 0
+    failed = []
+    for topic, path in SHOPIFY_WEBHOOK_TOPICS.items():
+        callback_url = f"{base_url}{path}"
+        payload = {
+            "webhook": {
+                "topic": topic,
+                "address": callback_url,
+                "format": "json",
+            }
+        }
+        try:
+            _shopify_request("POST", connection, "/webhooks.json", payload=payload)
+            registered += 1
+        except requests.HTTPError as exc:
+            response_text = getattr(exc.response, "text", "")
+            if exc.response is not None and exc.response.status_code in {400, 422} and "address" in response_text:
+                registered += 1
+                continue
+            failed.append({"topic": topic, "error": str(exc)})
+        except requests.RequestException as exc:
+            failed.append({"topic": topic, "error": str(exc)})
+
+    connection.webhook_status = "active" if not failed else "partial"
+    db.add(
+        AgentAction(
+            action_type="shopify_webhook_registration",
+            status=connection.webhook_status,
+            payload=_json_dumps({"connection_id": connection.id, "topics": list(SHOPIFY_WEBHOOK_TOPICS)}),
+            result=_json_dumps({"registered": registered, "failed": failed}),
+        )
+    )
+    db.commit()
+    return {"status": connection.webhook_status, "registered": registered, "failed": failed}
+
+
+def bootstrap_shopify_connection(db: Session, connection: EcommerceConnection) -> dict:
+    result = {"connection_id": connection.id}
+    try:
+        result["test"] = test_connection(connection)
+        db.commit()
+        db.refresh(connection)
+        result["orders"] = sync_orders(db, connection, 50)
+        result["products"] = sync_products(db, connection, 100)
+        result["customers"] = sync_customers(db, connection, 100)
+        from app.services.ecommerce_sync import sync_product_catalog_knowledge
+
+        result["knowledge"] = sync_product_catalog_knowledge(db, connection, 100)
+        result["webhooks"] = register_shopify_webhooks(db, connection)
+        connection.status = "active"
+        db.commit()
+    except Exception as exc:
+        connection.status = "failed"
+        db.add(
+            AgentAction(
+                action_type="shopify_connection_bootstrap_failed",
+                status="failed",
+                payload=_json_dumps({"connection_id": connection.id, "store_url": connection.store_url}),
+                result=_json_dumps({"error": str(exc)}),
+            )
+        )
+        db.commit()
+        raise
+    return result
+
+
 def _phone_from_shopify(order: dict) -> str | None:
     shipping = order.get("shipping_address") or {}
     customer = order.get("customer") or {}
@@ -373,30 +626,115 @@ def _tracking_from_shopify(order: dict) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _tracking_values_from_shopify(order: dict) -> tuple[list[str], list[str], str | None, str | None]:
+    numbers = []
+    urls = []
+    companies = []
+    shipment_statuses = []
+    for fulfillment in order.get("fulfillments") or []:
+        if fulfillment.get("tracking_number"):
+            numbers.append(fulfillment.get("tracking_number"))
+        if fulfillment.get("tracking_url"):
+            urls.append(fulfillment.get("tracking_url"))
+        if fulfillment.get("tracking_company"):
+            companies.append(fulfillment.get("tracking_company"))
+        if fulfillment.get("shipment_status"):
+            shipment_statuses.append(fulfillment.get("shipment_status"))
+    return numbers, urls, companies[0] if companies else None, shipment_statuses[0] if shipment_statuses else None
+
+
+def _shopify_customer_name(customer: dict, shipping: dict | None = None) -> str | None:
+    shipping = shipping or {}
+    first = shipping.get("first_name") or customer.get("first_name") or ""
+    last = shipping.get("last_name") or customer.get("last_name") or ""
+    return " ".join([first, last]).strip() or customer.get("name")
+
+
+def upsert_customer(db: Session, connection: EcommerceConnection, customer: dict | None) -> EcommerceCustomer | None:
+    if not isinstance(customer, dict) or not customer.get("id"):
+        return None
+    row = (
+        db.query(EcommerceCustomer)
+        .filter(
+            EcommerceCustomer.connection_id == connection.id,
+            EcommerceCustomer.external_id == str(customer.get("id")),
+        )
+        .first()
+    )
+    if not row:
+        row = EcommerceCustomer(
+            tenant_id=connection.tenant_id,
+            connection_id=connection.id,
+            platform=connection.platform,
+            external_id=str(customer.get("id")),
+            shopify_customer_id=str(customer.get("id")),
+        )
+        db.add(row)
+    row.tenant_id = connection.tenant_id
+    row.name = _shopify_customer_name(customer)
+    row.phone = customer.get("phone") or customer.get("default_address", {}).get("phone") or row.phone
+    row.email = customer.get("email") or row.email
+    row.total_orders = int(customer.get("orders_count") or row.total_orders or 0)
+    row.total_spend = str(customer.get("total_spent") or row.total_spend or "")
+    row.tags = customer.get("tags")
+    row.addresses = _json_dumps(customer.get("addresses") or [])
+    row.last_order_at = customer.get("updated_at") or row.last_order_at
+    row.marketing_consent = _json_dumps(customer.get("email_marketing_consent") or {})
+    row.preferred_language = customer.get("locale") or row.preferred_language
+    row.raw_payload = _json_dumps(customer)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 def _normalize_shopify_order(order: dict) -> dict:
     tracking_number, tracking_url = _tracking_from_shopify(order)
+    tracking_numbers, tracking_urls, courier_company, shipment_status = _tracking_values_from_shopify(order)
     items = [
         {
             "name": item.get("name") or item.get("title"),
             "quantity": item.get("quantity"),
             "sku": item.get("sku"),
+            "product_id": item.get("product_id"),
+            "variant_id": item.get("variant_id"),
+            "price": item.get("price"),
         }
         for item in order.get("line_items", [])
     ]
+    customer = order.get("customer") or {}
     return {
         "external_id": str(order.get("id")),
+        "shopify_order_id": str(order.get("id")),
         "order_number": str(order.get("name") or order.get("id")),
         "phone": _phone_from_shopify(order),
         "email": order.get("email"),
         "customer_name": _name_from_shopify(order),
+        "customer": customer,
+        "tags": order.get("tags"),
+        "note": order.get("note"),
+        "shipping_address": order.get("shipping_address") or {},
+        "billing_address": order.get("billing_address") or {},
         "status": order.get("fulfillment_status") or "received",
         "fulfillment_status": order.get("fulfillment_status"),
         "financial_status": order.get("financial_status"),
+        "subtotal": str(order.get("subtotal_price") or ""),
         "total": str(order.get("total_price") or ""),
+        "discounts": str(order.get("total_discounts") or ""),
+        "tax": str(order.get("total_tax") or ""),
         "currency": order.get("currency"),
+        "payment_gateway": ", ".join(order.get("payment_gateway_names") or []),
         "tracking_number": tracking_number,
         "tracking_url": tracking_url,
+        "tracking_numbers": tracking_numbers,
+        "tracking_urls": tracking_urls,
+        "courier_company": courier_company,
+        "shipment_status": shipment_status,
+        "delivery_status": shipment_status if shipment_status == "delivered" else None,
+        "skus": [item.get("sku") for item in items if item.get("sku")],
+        "product_ids": [item.get("product_id") for item in items if item.get("product_id")],
         "items": items,
+        "shopify_created_at": order.get("created_at"),
+        "shopify_updated_at": order.get("updated_at"),
     }
 
 
@@ -415,18 +753,37 @@ def _normalize_woocommerce_order(order: dict) -> dict:
     ]
     return {
         "external_id": str(order.get("id")),
+        "shopify_order_id": None,
         "order_number": str(order.get("number") or order.get("id")),
         "phone": billing.get("phone"),
         "email": billing.get("email"),
         "customer_name": " ".join([first, last]).strip() or None,
+        "customer": {},
+        "tags": None,
+        "note": order.get("customer_note"),
+        "shipping_address": shipping,
+        "billing_address": billing,
         "status": order.get("status"),
         "fulfillment_status": order.get("status"),
         "financial_status": order.get("status"),
+        "subtotal": str(order.get("subtotal") or ""),
         "total": str(order.get("total") or ""),
+        "discounts": str(order.get("discount_total") or ""),
+        "tax": str(order.get("total_tax") or ""),
         "currency": order.get("currency"),
+        "payment_gateway": order.get("payment_method_title") or order.get("payment_method"),
         "tracking_number": None,
         "tracking_url": None,
+        "tracking_numbers": [],
+        "tracking_urls": [],
+        "courier_company": None,
+        "shipment_status": None,
+        "delivery_status": None,
+        "skus": [item.get("sku") for item in items if item.get("sku")],
+        "product_ids": [item.get("product_id") for item in items if item.get("product_id")],
         "items": items,
+        "shopify_created_at": order.get("date_created"),
+        "shopify_updated_at": order.get("date_modified"),
     }
 
 
@@ -438,6 +795,7 @@ def _normalize_order(connection: EcommerceConnection, order: dict) -> dict:
 
 def upsert_order(db: Session, connection: EcommerceConnection, order: dict) -> EcommerceOrder:
     normalized = _normalize_order(connection, order)
+    customer = upsert_customer(db, connection, normalized.get("customer"))
     row = (
         db.query(EcommerceOrder)
         .filter(
@@ -448,6 +806,7 @@ def upsert_order(db: Session, connection: EcommerceConnection, order: dict) -> E
     )
     if not row:
         row = EcommerceOrder(
+            tenant_id=connection.tenant_id,
             connection_id=connection.id,
             platform=connection.platform,
             external_id=normalized["external_id"],
@@ -455,19 +814,39 @@ def upsert_order(db: Session, connection: EcommerceConnection, order: dict) -> E
         )
         db.add(row)
 
+    row.tenant_id = connection.tenant_id
+    row.shopify_order_id = normalized["shopify_order_id"]
+    row.ecommerce_customer_id = customer.id if customer else row.ecommerce_customer_id
     row.order_number = normalized["order_number"]
     row.phone = normalized["phone"] or row.phone
     row.email = normalized["email"] or row.email
     row.customer_name = normalized["customer_name"] or row.customer_name
+    row.tags = normalized["tags"]
+    row.note = normalized["note"]
+    row.shipping_address = _json_dumps(normalized["shipping_address"])
+    row.billing_address = _json_dumps(normalized["billing_address"])
     row.status = normalized["status"]
     row.fulfillment_status = normalized["fulfillment_status"]
     row.financial_status = normalized["financial_status"]
+    row.subtotal = normalized["subtotal"]
     row.total = normalized["total"]
+    row.discounts = normalized["discounts"]
+    row.tax = normalized["tax"]
     row.currency = normalized["currency"]
+    row.payment_gateway = normalized["payment_gateway"]
     row.tracking_number = normalized["tracking_number"]
     row.tracking_url = normalized["tracking_url"]
-    row.items = json.dumps(normalized["items"])
-    row.raw_payload = json.dumps(order)
+    row.tracking_numbers = _json_dumps(normalized["tracking_numbers"])
+    row.tracking_urls = _json_dumps(normalized["tracking_urls"])
+    row.courier_company = normalized["courier_company"]
+    row.shipment_status = normalized["shipment_status"]
+    row.delivery_status = normalized["delivery_status"]
+    row.skus = _json_dumps(normalized["skus"])
+    row.product_ids = _json_dumps(normalized["product_ids"])
+    row.items = _json_dumps(normalized["items"])
+    row.raw_payload = _json_dumps(order)
+    row.shopify_created_at = normalized["shopify_created_at"]
+    row.shopify_updated_at = normalized["shopify_updated_at"]
     db.commit()
     db.refresh(row)
     return row
@@ -636,4 +1015,92 @@ def send_delivered_followups(db: Session, limit: int = 25) -> dict:
         sent += 1
 
     return {"status": "success", "sent": sent, "skipped": skipped}
+
+
+def normalize_shop_domain(value: str | None) -> str:
+    return (value or "").strip().replace("https://", "").replace("http://", "").strip("/")
+
+
+def verify_shopify_hmac(raw_body: bytes, hmac_header: str | None) -> bool:
+    secret = settings.shopify_webhook_secret
+    if not secret:
+        return True
+    if not hmac_header:
+        return False
+    digest = hmac.new(secret.encode(), raw_body, hashlib.sha256).digest()
+    calculated = base64.b64encode(digest).decode()
+    return hmac.compare_digest(calculated, hmac_header)
+
+
+def find_shopify_connection_by_domain(db: Session, shop_domain: str) -> EcommerceConnection | None:
+    domain = normalize_shop_domain(shop_domain)
+    return (
+        db.query(EcommerceConnection)
+        .filter(
+            EcommerceConnection.platform == "shopify",
+            (
+                (EcommerceConnection.myshopify_domain == domain)
+                | (EcommerceConnection.store_url == domain)
+            ),
+        )
+        .first()
+    )
+
+
+def record_shopify_webhook_event(
+    db: Session,
+    connection: EcommerceConnection,
+    shop_domain: str,
+    topic: str,
+    webhook_id: str | None,
+    raw_body: bytes,
+) -> tuple[ShopifyWebhookEvent, bool]:
+    payload_hash = hashlib.sha256(raw_body).hexdigest()
+    existing = None
+    if webhook_id:
+        existing = (
+            db.query(ShopifyWebhookEvent)
+            .filter(ShopifyWebhookEvent.webhook_id == webhook_id)
+            .first()
+        )
+    if not existing:
+        existing = (
+            db.query(ShopifyWebhookEvent)
+            .filter(
+                ShopifyWebhookEvent.connection_id == connection.id,
+                ShopifyWebhookEvent.topic == topic,
+                ShopifyWebhookEvent.payload_hash == payload_hash,
+            )
+            .first()
+        )
+    if existing:
+        return existing, existing.status == "processed"
+
+    event = ShopifyWebhookEvent(
+        tenant_id=connection.tenant_id,
+        connection_id=connection.id,
+        shop_domain=normalize_shop_domain(shop_domain),
+        topic=topic,
+        webhook_id=webhook_id,
+        payload_hash=payload_hash,
+        raw_payload=raw_body.decode("utf-8", errors="replace"),
+        status="pending",
+        attempts=1,
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event, False
+
+
+def mark_shopify_webhook_event(
+    db: Session,
+    event: ShopifyWebhookEvent,
+    status: str,
+    error: str | None = None,
+) -> None:
+    event.status = status
+    event.error = error
+    event.processed_at = datetime.utcnow() if status == "processed" else None
+    db.commit()
 

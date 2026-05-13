@@ -49,6 +49,8 @@ def generate_ai_reply(
     phone: str,
     user_message: str,
     agent_context: str = "",
+    tool_context: str = "",
+    use_rag_fallback: bool = True,
 ) -> str:
     api_key = os.getenv("OPENROUTER_API_KEY")
     model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o")
@@ -56,13 +58,23 @@ def generate_ai_reply(
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is not configured")
 
-    context = retrieve_relevant_context(db, user_message)
+    context = tool_context.strip()
+    rag_context = ""
+    if use_rag_fallback and not context:
+        rag_context = retrieve_relevant_context(db, user_message)
+        context = rag_context
+    elif use_rag_fallback:
+        rag_context = retrieve_relevant_context(db, user_message)
+        if rag_context:
+            context = f"{context}\n\nFallback knowledge context:\n{rag_context}".strip()
+
     if not context:
         context = _latest_scraped_context(db)
 
     system_prompt = (
         "You are an advanced WhatsApp AI agent. Reply clearly and briefly. "
-        "Use the provided retrieved website context when it is relevant. "
+        "Use structured database/tool context first when it is provided. "
+        "Use fallback knowledge context only when the database/tool context is not enough. "
         "Use customer memory and intent context to personalize the response. "
         "Ask for missing details when an action needs more information. "
         "If the answer is not available in the context, say that you do not "
@@ -73,7 +85,7 @@ def generate_ai_reply(
         system_prompt += f"\n\nCustomer and agent context:\n{agent_context}"
 
     if context:
-        system_prompt += f"\n\nRetrieved website context:\n{context}"
+        system_prompt += f"\n\nAvailable business context:\n{context}"
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(_recent_conversation(db, phone))

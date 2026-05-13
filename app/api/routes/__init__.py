@@ -9,6 +9,7 @@ ROUTERS = [
     whatsapp.router,
     rag.router,
     ecommerce_router.router,
+    ecommerce_router.webhooks_router,
     automation_router.router,
     crm.router,
 ]

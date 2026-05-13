@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import ROUTERS
 from app.core.config import settings
+from app.db.schema import ensure_sqlite_ecommerce_schema
 from app.db.session import SessionLocal, engine
 from app.models.entities import Base
 from app.modules.automation.automation_service import (
@@ -16,6 +17,7 @@ from app.modules.ecommerce.ecommerce_service import ecommerce_auto_sync_loop
 
 def create_app() -> FastAPI:
     Base.metadata.create_all(bind=engine)
+    ensure_sqlite_ecommerce_schema(engine)
     db = SessionLocal()
     try:
         ensure_default_automation_rules(db)
