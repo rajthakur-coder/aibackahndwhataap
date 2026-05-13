@@ -18,10 +18,7 @@ ECOMMERCE_MODELS = [
 ]
 
 
-def ensure_sqlite_ecommerce_schema(engine) -> None:
-    if engine.dialect.name != "sqlite":
-        return
-
+def ensure_ecommerce_schema(engine) -> None:
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
     with engine.begin() as connection:
@@ -37,3 +34,7 @@ def ensure_sqlite_ecommerce_schema(engine) -> None:
                 connection.execute(
                     text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {column_type}')
                 )
+
+
+def ensure_sqlite_ecommerce_schema(engine) -> None:
+    ensure_ecommerce_schema(engine)
