@@ -819,6 +819,8 @@ def _normalize_woocommerce_order(order: dict) -> dict:
             "name": item.get("name"),
             "quantity": item.get("quantity"),
             "sku": item.get("sku"),
+            "product_id": item.get("product_id"),
+            "variant_id": item.get("variation_id"),
         }
         for item in order.get("line_items", [])
     ]

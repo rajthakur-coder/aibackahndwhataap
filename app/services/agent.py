@@ -19,7 +19,7 @@ from app.models.entities import (
 
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
-ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)[\s:#-]*#?([A-Za-z0-9-]{2,})\b", re.I)
+ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*id)?[\s:#-]*#?([A-Za-z0-9-]{2,})\b", re.I)
 NAME_RE = re.compile(r"\b(?:my name is|i am|i'm|name is|mera naam)\s+([A-Za-z][A-Za-z ]{1,40})", re.I)
 
 INTENT_KEYWORDS = {

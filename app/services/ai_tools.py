@@ -16,7 +16,7 @@ from app.services.product_search import product_search_text, score_search_text, 
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = 20
-ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)[\s:#-]*#?([A-Za-z0-9-]{2,})\b", re.I)
+ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*id)?[\s:#-]*#?([A-Za-z0-9-]{2,})\b", re.I)
 TOOL_NAMES = {
     "get_order_status",
     "search_products",

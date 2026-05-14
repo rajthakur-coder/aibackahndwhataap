@@ -591,6 +591,23 @@ def _product_caption(product: EcommerceProduct) -> str:
     return "\n".join(caption_parts)
 
 
+def _first_retailer_id(product: EcommerceProduct) -> str | None:
+    skus = []
+    if product.sku:
+        skus.extend(part.strip() for part in product.sku.split(",") if part.strip())
+    try:
+        skus.extend(
+            sku
+            for sku in json.loads(product.skus or "[]")
+            if isinstance(sku, str) and sku.strip()
+        )
+    except json.JSONDecodeError:
+        pass
+    if skus:
+        return sorted(set(skus))[0]
+    return product.external_id or product.shopify_product_id
+
+
 def _scraped_image_urls(content: str) -> list[str]:
     match = re.search(r"^Images:\s*(.+)$", content or "", flags=re.MULTILINE)
     if not match:
@@ -641,6 +658,10 @@ def find_relevant_catalog_products(db: Session, query: str, limit: int = 5) -> l
             "price_max": product.price_max,
             "image_url": (_product_image_urls(product) or [None])[0],
             "caption": _product_caption(product),
+            "sku": product.sku,
+            "external_id": product.external_id,
+            "shopify_product_id": product.shopify_product_id,
+            "retailer_id": _first_retailer_id(product),
         }
         for product in sorted_products
     ]
@@ -679,6 +700,13 @@ def find_relevant_product_image(db: Session, query: str) -> dict | None:
         "title": best_product.title,
         "image_url": image_url,
         "caption": _product_caption(best_product),
+        "product_url": best_product.product_url,
+        "price_min": best_product.price_min,
+        "price_max": best_product.price_max,
+        "sku": best_product.sku,
+        "external_id": best_product.external_id,
+        "shopify_product_id": best_product.shopify_product_id,
+        "retailer_id": _first_retailer_id(best_product),
     }
 
 
