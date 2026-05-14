@@ -11,6 +11,7 @@ from app.models.ecommerce import EcommerceCustomer, EcommerceOrder, EcommercePro
 from app.models.entities import FAQ, Policy, Service, StructuredProduct
 from app.services.ecommerce import order_status_text
 from app.services.intelligence import detect_query_intent
+from app.services.product_search import product_search_text, score_search_text, search_terms
 
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -157,24 +158,17 @@ def _order_status_context(db: Session, phone: str, message: str) -> dict:
 
 
 def _product_context(db: Session, _phone: str, message: str) -> dict:
-    terms = [term for term in re.findall(r"[a-zA-Z0-9]+", message.lower()) if len(term) > 2]
-    query = db.query(EcommerceProduct)
-    if terms:
-        filters = []
-        for term in terms[:6]:
-            like = f"%{term}%"
-            filters.extend(
-                [
-                    EcommerceProduct.title.ilike(like),
-                    EcommerceProduct.description.ilike(like),
-                    EcommerceProduct.tags.ilike(like),
-                    EcommerceProduct.product_type.ilike(like),
-                    EcommerceProduct.vendor.ilike(like),
-                    EcommerceProduct.sku.ilike(like),
-                ]
-            )
-        query = query.filter(or_(*filters))
-    products = query.order_by(EcommerceProduct.updated_at.desc()).limit(6).all()
+    query_terms = search_terms(message)
+    candidates = db.query(EcommerceProduct).order_by(EcommerceProduct.updated_at.desc()).limit(400).all()
+    scored_products = [
+        (score_search_text(query_terms, product_search_text(product)), product)
+        for product in candidates
+    ]
+    products = [
+        product
+        for score, product in sorted(scored_products, key=lambda item: item[0], reverse=True)
+        if score > 0
+    ][:6]
     if not products:
         return {"context": "No matching products found in ecommerce database.", "data": [], "needs_rag": True}
     lines = []

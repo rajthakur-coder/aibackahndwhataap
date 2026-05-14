@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.models.ecommerce import EcommerceProduct
 from app.models.entities import StructuredProduct
 from app.services.intelligence import detect_query_intent
+from app.services.product_search import score_search_text, search_terms
 
 
 TOKEN_RE = re.compile(r"[a-zA-Z0-9]+")
@@ -17,6 +18,8 @@ BUDGET_RE = re.compile(
 PRICE_RE = re.compile(r"[\d,]+(?:\.\d{1,2})?")
 SALES_TERMS = {
     "best",
+    "chahiye",
+    "chaiye",
     "recommend",
     "suggest",
     "dikhao",
@@ -28,6 +31,15 @@ SALES_TERMS = {
     "price",
     "shoes",
     "shoe",
+    "joota",
+    "joote",
+    "juta",
+    "jute",
+    "kapda",
+    "kapde",
+    "mobile",
+    "phone",
+    "tshirt",
     "product",
     "products",
 }
@@ -44,7 +56,7 @@ def find_product_recommendations(db: Session, query: str, limit: int = 5) -> lis
         return []
 
     budget = extract_budget(query)
-    query_terms = Counter(token for token in _tokens(query) if token not in SALES_TERMS)
+    query_terms = search_terms(query)
     candidates = _ecommerce_candidates(db) + _structured_candidates(db)
     scored = []
 
@@ -57,7 +69,7 @@ def find_product_recommendations(db: Session, query: str, limit: int = 5) -> lis
             str(product.get(key) or "")
             for key in ("title", "description", "category", "brand", "tags", "product_type")
         )
-        score = _score(query_terms, searchable)
+        score = score_search_text(query_terms, searchable)
         if budget and price_value:
             score += max(0.0, 1.0 - (price_value / budget))
         if product.get("image_url"):

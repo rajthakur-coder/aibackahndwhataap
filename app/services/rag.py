@@ -22,6 +22,7 @@ from app.models.entities import (
 )
 from app.services.intelligence import detect_query_intent
 from app.services.pinecone import query_context, query_matches, upsert_chunks
+from app.services.product_search import product_search_text, score_search_text, search_terms
 
 
 CHUNK_SIZE = 1200
@@ -92,6 +93,15 @@ IMAGE_REQUEST_TERMS = {
 CATALOG_REQUEST_TERMS = {
     "catalog",
     "catalogue",
+    "footwear",
+    "joota",
+    "joote",
+    "juta",
+    "jute",
+    "kapda",
+    "kapde",
+    "mobile",
+    "phone",
     "products",
     "product",
     "collection",
@@ -104,6 +114,9 @@ CATALOG_REQUEST_TERMS = {
     "range",
     "service",
     "services",
+    "shoe",
+    "shoes",
+    "tshirt",
     "experience",
     "experiences",
 }
@@ -111,6 +124,8 @@ REQUEST_ACTION_TERMS = {
     "bhejo",
     "catalog",
     "catalogue",
+    "chahiye",
+    "chaiye",
     "de",
     "dekhna",
     "dikha",
@@ -600,25 +615,23 @@ def find_relevant_catalog_products(db: Session, query: str, limit: int = 5) -> l
     if not is_catalog_request(query):
         return []
 
-    query_terms = Counter(_tokens(query))
+    query_terms = search_terms(query)
     products = db.query(EcommerceProduct).order_by(EcommerceProduct.updated_at.desc()).limit(400).all()
     scored = []
     for product in products:
-        score = _score_chunk(
-            query_terms,
-            ScrapedChunk(
-                scraped_data_id=0,
-                url=product.product_url or product.title,
-                chunk_index=0,
-                content=product_knowledge_text(product),
-            ),
-        )
+        score = score_search_text(query_terms, product_search_text(product))
         scored.append((score, product))
 
     sorted_products = [
         product
         for _score, product in sorted(scored, key=lambda item: item[0], reverse=True)
+        if _score > 0
     ][: max(1, min(limit, 10))]
+    if not sorted_products:
+        sorted_products = [
+            product
+            for _score, product in sorted(scored, key=lambda item: item[0], reverse=True)
+        ][: max(1, min(limit, 10))]
 
     return [
         {
@@ -637,7 +650,7 @@ def find_relevant_product_image(db: Session, query: str) -> dict | None:
     if not is_image_request(query):
         return None
 
-    query_terms = Counter(_tokens(query))
+    query_terms = search_terms(query)
     if not query_terms:
         return None
 
@@ -645,15 +658,7 @@ def find_relevant_product_image(db: Session, query: str) -> dict | None:
     best_product = None
     best_score = 0.0
     for product in products:
-        score = _score_chunk(
-            query_terms,
-            ScrapedChunk(
-                scraped_data_id=0,
-                url=product.product_url or product.title,
-                chunk_index=0,
-                content=product_knowledge_text(product),
-            ),
-        )
+        score = score_search_text(query_terms, product_search_text(product))
         if score > best_score:
             best_score = score
             best_product = product
