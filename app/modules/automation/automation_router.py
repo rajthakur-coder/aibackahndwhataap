@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_async_db as get_db
+from app.db.session import get_db
 from app.modules.automation import automation_service as service
 from app.modules.automation.automation_schema import (
     AbandonedCartRequest,
@@ -13,7 +13,7 @@ from app.modules.automation.automation_schema import (
 )
 
 
-router = APIRouter(prefix="/automations", tags=["automations"])
+automation_router = APIRouter(prefix="/automations", tags=["automations"])
 
 
 def _raise_if_error(result: dict) -> dict:
@@ -25,12 +25,12 @@ def _raise_if_error(result: dict) -> dict:
     return result
 
 
-@router.post("/seed-defaults")
+@automation_router.post("/seed-defaults")
 async def seed_default_automations(db: AsyncSession = Depends(get_db)):
     return await service.seed_default_automations(db)
 
 
-@router.post("/templates")
+@automation_router.post("/templates")
 async def create_message_template(
     data: MessageTemplateRequest,
     db: AsyncSession = Depends(get_db),
@@ -38,12 +38,12 @@ async def create_message_template(
     return _raise_if_error(await service.create_message_template(db, data))
 
 
-@router.get("/templates")
+@automation_router.get("/templates")
 async def list_message_templates(db: AsyncSession = Depends(get_db)):
     return await service.list_message_templates(db)
 
 
-@router.post("/templates/{template_id}/send-test")
+@automation_router.post("/templates/{template_id}/send-test")
 async def send_template_test(
     template_id: int,
     data: SendTemplateRequest,
@@ -52,7 +52,7 @@ async def send_template_test(
     return _raise_if_error(await service.send_template_test(db, template_id, data))
 
 
-@router.post("/rules")
+@automation_router.post("/rules")
 async def create_automation_rule(
     data: AutomationRuleRequest,
     db: AsyncSession = Depends(get_db),
@@ -60,7 +60,7 @@ async def create_automation_rule(
     return _raise_if_error(await service.create_automation_rule(db, data))
 
 
-@router.get("/rules")
+@automation_router.get("/rules")
 async def list_automation_rules(
     trigger: str | None = None,
     db: AsyncSession = Depends(get_db),
@@ -68,7 +68,7 @@ async def list_automation_rules(
     return await service.list_automation_rules(db, trigger)
 
 
-@router.patch("/rules/{rule_id}")
+@automation_router.patch("/rules/{rule_id}")
 async def update_automation_rule(
     rule_id: int,
     data: AutomationRuleUpdateRequest,
@@ -77,7 +77,7 @@ async def update_automation_rule(
     return _raise_if_error(await service.update_automation_rule(db, rule_id, data))
 
 
-@router.post("/events")
+@automation_router.post("/events")
 async def add_automation_event(
     data: AutomationEventRequest,
     db: AsyncSession = Depends(get_db),
@@ -85,7 +85,7 @@ async def add_automation_event(
     return await service.create_automation_event(db, data)
 
 
-@router.post("/events/abandoned-cart")
+@automation_router.post("/events/abandoned-cart")
 async def add_abandoned_cart_event(
     data: AbandonedCartRequest,
     db: AsyncSession = Depends(get_db),
@@ -93,7 +93,7 @@ async def add_abandoned_cart_event(
     return await service.create_abandoned_cart_event(db, data)
 
 
-@router.get("/events")
+@automation_router.get("/events")
 async def list_automation_events(
     status: str | None = None,
     trigger: str | None = None,
@@ -102,17 +102,17 @@ async def list_automation_events(
     return await service.list_automation_events(db, status=status, trigger=trigger)
 
 
-@router.post("/events/{event_id}/process")
+@automation_router.post("/events/{event_id}/process")
 async def process_event(event_id: int, db: AsyncSession = Depends(get_db)):
     return _raise_if_error(await service.process_event(db, event_id))
 
 
-@router.post("/process-due")
+@automation_router.post("/process-due")
 async def process_due(limit: int = 50, db: AsyncSession = Depends(get_db)):
     return await service.process_due_events(db, limit=limit)
 
 
-@router.get("/executions")
+@automation_router.get("/executions")
 async def list_automation_executions(
     status: str | None = None,
     db: AsyncSession = Depends(get_db),

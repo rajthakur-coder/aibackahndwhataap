@@ -4,22 +4,25 @@ This backend is organized as a package-first FastAPI application.
 
 ```text
 backend/
+  run.py               # Local uvicorn entrypoint
+  worker.py            # Future background worker entrypoint
+  alembic.ini          # Alembic config, points to app/alembic
   app/
-    api/
-      routes/          # Domain route modules
-        crm.py
-        ecommerce.py
-        rag.py
-        system.py
-        whatsapp.py
-    core/
-      config.py        # Environment loading and app settings
+    alembic/           # Database migrations
+    config.py          # Environment loading and app settings
     db/
       session.py       # SQLAlchemy engine, SessionLocal, Base, get_db
+      mixins.py        # Shared SQLAlchemy mixins
     models/
       entities.py      # SQLAlchemy models
-    schemas/
-      requests.py      # Pydantic request schemas
+    modules/           # Domain modules with router/schema/service files
+      ai/
+      automation/
+      crm/
+      ecommerce/
+      rag/
+      system/
+      whatsapp/
     services/
       agent.py         # CRM/lead/appointment agent logic
       ecommerce.py     # Ecommerce sync/order/product logic
@@ -36,7 +39,11 @@ backend/
       serializers.py   # Response serialization helpers
       webhook_processor.py # WhatsApp webhook processing flow
       whatsapp.py      # WhatsApp Cloud API messaging
-    shared/            # Cross-cutting helpers shared by domains
+    shared/            # Cross-cutting helpers and shared schemas
+    utils/             # Shared utility helpers
+    security/          # Auth/security dependencies
+    queue/             # Queue/worker integration points
+    mail_templates/    # Email templates
     main.py            # FastAPI app wiring and router registration
 ```
 

@@ -1,4 +1,4 @@
-from app.services.ecommerce import (
+from app.modules.ecommerce.core.ecommerce_core_service import (
     create_connection,
     cross_sell_text,
     fetch_orders,
@@ -23,7 +23,7 @@ from app.services.ecommerce import (
     upsert_product,
     verify_shopify_hmac,
 )
-from app.services.ecommerce_sync import (
+from app.modules.ecommerce.core.ecommerce_sync_service import (
     ecommerce_auto_sync_loop,
     sync_active_ecommerce_connections,
     sync_product_catalog_knowledge,

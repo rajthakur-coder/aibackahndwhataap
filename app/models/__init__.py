@@ -1,34 +1,43 @@
-"""SQLAlchemy model exports."""
-
-from app.models.entities import (
-    AgentAction,
-    Appointment,
+from app.db.session import Base
+from app.models.automation import (
     AutomationEvent,
     AutomationExecution,
     AutomationRule,
-    Base,
-    Contact,
+    MessageTemplate,
+)
+from app.models.contact import Contact, ContactTag, Tag
+from app.models.crm import (
+    AgentAction,
+    Appointment,
     CustomerMemory,
     CustomerProfile,
+    HandoffTicket,
+    Lead,
+    OrderStatus,
+)
+from app.models.ecommerce import (
     EcommerceConnection,
     EcommerceCustomer,
     EcommerceOrder,
     EcommerceProduct,
+    ShopifyWebhookEvent,
+)
+from app.models.rag import (
     FAQ,
-    HandoffTicket,
     KnowledgeChunk,
     KnowledgeDocument,
-    Lead,
-    Message,
-    MessageTemplate,
-    OrderStatus,
     Policy,
     ScrapedChunk,
     ScrapedData,
+    ScrapeJob,
     Service,
     StructuredProduct,
-    ShopifyWebhookEvent,
+)
+from app.models.whatsapp import (
+    Message,
     WebhookEvent,
+    WhatsappCredential,
+    WhatsappTemplate,
 )
 
 __all__ = [
@@ -39,6 +48,8 @@ __all__ = [
     "AutomationRule",
     "Base",
     "Contact",
+    "ContactTag",
+    "Tag",
     "CustomerMemory",
     "CustomerProfile",
     "EcommerceConnection",
@@ -60,4 +71,6 @@ __all__ = [
     "StructuredProduct",
     "ShopifyWebhookEvent",
     "WebhookEvent",
+    "WhatsappCredential",
+    "WhatsappTemplate",
 ]

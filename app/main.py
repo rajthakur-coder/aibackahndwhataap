@@ -2,28 +2,88 @@ import asyncio
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.api.routes import ROUTERS
-from app.core.config import settings
-from app.db.schema import ensure_ecommerce_schema
-from app.db.session import SessionLocal, engine
-from app.models.entities import Base
+from app.config import settings
+from app.db.session import AsyncSessionLocal, Base, engine
+from app.modules.automation.automation_router import automation_router
 from app.modules.automation.automation_service import (
     automation_processor_loop,
     ensure_default_automation_rules,
 )
+from app.modules.crm.crm_router import crm_router
+from app.modules.ecommerce.ecommerce_router import (
+    ecommerce_router,
+    shopify_webhooks_router,
+)
 from app.modules.ecommerce.ecommerce_service import ecommerce_auto_sync_loop
+from app.modules.rag.rag_router import rag_router
+from app.modules.system.system_router import system_router
+from app.modules.whatsapp.whatsapp_router import whatsapp_router
+
+
+ROUTERS = [
+    system_router,
+    whatsapp_router,
+    rag_router,
+    ecommerce_router,
+    shopify_webhooks_router,
+    automation_router,
+    crm_router,
+]
+
+
+def ensure_live_chat_message_columns(connection) -> None:
+    inspector = inspect(connection)
+    if not inspector.has_table("messages"):
+        return
+
+    existing = {column["name"] for column in inspector.get_columns("messages")}
+    columns = {
+        "status": "VARCHAR",
+        "message_type": "VARCHAR",
+        "whatsapp_message_id": "VARCHAR",
+    }
+    for name, ddl_type in columns.items():
+        if name not in existing:
+            connection.execute(text(f"ALTER TABLE messages ADD COLUMN {name} {ddl_type}"))
+
+
+def ensure_contact_columns(connection) -> None:
+    inspector = inspect(connection)
+    if not inspector.has_table("contacts"):
+        return
+
+    existing = {column["name"] for column in inspector.get_columns("contacts")}
+    columns = {
+        "profile_name": "VARCHAR",
+        "custom_name": "VARCHAR",
+        "remark": "TEXT",
+        "status": "VARCHAR DEFAULT 'Active'",
+        "created_at": "TIMESTAMP",
+        "updated_at": "TIMESTAMP",
+    }
+    for name, ddl_type in columns.items():
+        if name not in existing:
+            connection.execute(text(f"ALTER TABLE contacts ADD COLUMN {name} {ddl_type}"))
+
+
+def initialize_database_schema(connection) -> None:
+    is_postgres = connection.dialect.name == "postgresql"
+    if is_postgres:
+        connection.execute(text("SELECT pg_advisory_lock(hashtext('ai_whatsapp_schema_init'))"))
+
+    try:
+        Base.metadata.create_all(bind=connection)
+        ensure_live_chat_message_columns(connection)
+        ensure_contact_columns(connection)
+    finally:
+        if is_postgres:
+            connection.execute(text("SELECT pg_advisory_unlock(hashtext('ai_whatsapp_schema_init'))"))
 
 
 def create_app() -> FastAPI:
-    Base.metadata.create_all(bind=engine)
-    ensure_ecommerce_schema(engine)
-    db = SessionLocal()
-    try:
-        ensure_default_automation_rules(db)
-    finally:
-        db.close()
-
     app = FastAPI(title="AI WhatsApp Automation API", version="1.0.0")
     app.add_middleware(
         CORSMiddleware,
@@ -38,6 +98,14 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def start_background_loops() -> None:
+        if settings.init_db_on_startup:
+            try:
+                async with engine.begin() as connection:
+                    await connection.run_sync(initialize_database_schema)
+            except SQLAlchemyError as exc:
+                print(f"Database schema initialization skipped: {exc}")
+            async with AsyncSessionLocal() as db:
+                await db.run_sync(ensure_default_automation_rules)
         if settings.ecommerce_auto_sync_enabled:
             asyncio.create_task(ecommerce_auto_sync_loop())
         if settings.automation_processor_enabled:

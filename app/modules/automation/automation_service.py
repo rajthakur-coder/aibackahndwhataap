@@ -11,7 +11,8 @@ from app.models.automation import (
     AutomationRule,
     MessageTemplate,
 )
-from app.models.entities import AgentAction, Message
+from app.models.crm import AgentAction
+from app.models.whatsapp import Message
 from app.modules.automation.automation_schema import (
     AbandonedCartRequest,
     AutomationEventRequest,
@@ -20,8 +21,8 @@ from app.modules.automation.automation_schema import (
     MessageTemplateRequest,
     SendTemplateRequest,
 )
-from app.services import automations as sync_automation
-from app.services.whatsapp import send_whatsapp_message, send_whatsapp_template
+from app.modules.automation.core import automation_sync_service as sync_automation
+from app.modules.whatsapp.core.whatsapp_client_service import send_whatsapp_message, send_whatsapp_template
 
 
 TRIGGER_ORDER_CREATED = sync_automation.TRIGGER_ORDER_CREATED
