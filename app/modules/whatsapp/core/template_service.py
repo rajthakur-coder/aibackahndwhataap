@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,6 +15,7 @@ from app.modules.whatsapp.core.whatsapp_setup_service import get_whatsapp_creden
 
 REQUEST_TIMEOUT = 30
 TEMPLATE_STATUSES = {"PENDING", "APPROVED", "REJECTED", "IN_REVIEW"}
+logger = logging.getLogger(__name__)
 
 
 def serialize_template(row: WhatsappTemplate) -> dict:
@@ -92,13 +94,36 @@ def register_template(db: Session, payload: dict[str, Any], tenant_id: str = "de
         return _error("Template with the same name and language already exists", 409)
 
     credential = get_whatsapp_credential(db, tenant_id=tenant_id)
+    if not credential or not credential.token or not credential.waba_id:
+        logger.error(
+            "WhatsApp template create skipped: missing credential tenant_id=%s has_credential=%s has_token=%s has_waba_id=%s",
+            tenant_id,
+            bool(credential),
+            bool(credential.token) if credential else False,
+            bool(credential.waba_id) if credential else False,
+        )
+        return _error("WhatsApp credential not found for the user", 400)
+
     graph_body = None
     status = "PENDING"
     wa_template_id = None
-    if credential and credential.token and credential.waba_id:
-        graph_body = _create_graph_template(credential.waba_id, credential.token, payload)
-        status = str(graph_body.get("status") or "PENDING").upper()
-        wa_template_id = str(graph_body.get("id")) if graph_body.get("id") else None
+    logger.info(
+        "Creating WhatsApp template on Meta tenant_id=%s waba_id=%s name=%s language=%s category=%s",
+        tenant_id,
+        credential.waba_id,
+        name,
+        language,
+        category,
+    )
+    graph_body = _create_graph_template(credential.waba_id, credential.token, payload)
+    logger.info(
+        "Meta template create response name=%s language=%s response=%s",
+        name,
+        language,
+        graph_body,
+    )
+    status = str(graph_body.get("status") or "PENDING").upper()
+    wa_template_id = str(graph_body.get("id")) if graph_body.get("id") else None
 
     row = WhatsappTemplate(
         tenant_id=tenant_id,
@@ -391,6 +416,7 @@ def _get_graph(url: str, token: str, params: dict[str, Any] | None = None) -> di
 
 
 def _post_graph(url: str, token: str, payload: dict[str, Any]) -> dict:
+    logger.info("Meta POST request url=%s payload=%s", url, payload)
     response = requests.post(
         url,
         json=payload,
@@ -405,8 +431,10 @@ def _parse_response(response: requests.Response) -> dict:
         body = response.json()
     except ValueError:
         body = {"message": response.text}
+    logger.info("Meta API response status=%s body=%s", response.status_code, body)
     if not 200 <= response.status_code < 300:
         message = body.get("error", {}).get("message") if isinstance(body, dict) else None
+        logger.error("Meta API request failed status=%s body=%s", response.status_code, body)
         raise RuntimeError(message or f"Meta API request failed with {response.status_code}")
     return body if isinstance(body, dict) else {"data": body}
 
