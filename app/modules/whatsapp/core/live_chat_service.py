@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from sqlalchemy import func, select
@@ -116,6 +116,12 @@ def _build_contact_rows(db: Session) -> list[dict]:
             .order_by(Message.created_at.desc(), Message.id.desc())
             .limit(1)
         ).scalars().first()
+        latest_incoming = db.execute(
+            select(Message)
+            .where(Message.phone == contact.phone, Message.direction == "incoming")
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        ).scalars().first()
         unread_count = db.execute(
             select(func.count(Message.id)).where(
                 Message.phone == contact.phone,
@@ -144,12 +150,14 @@ def _build_contact_rows(db: Session) -> list[dict]:
                 "last_message": latest.message if latest else "",
                 "last_message_type": (latest.message_type or "text") if latest else "text",
                 "last_message_time": latest.created_at.isoformat() if latest and latest.created_at else None,
-                "last_incoming_msg_time": latest.created_at.isoformat()
-                if latest and latest.direction == "incoming" and latest.created_at
+                "last_incoming_msg_time": latest_incoming.created_at.isoformat()
+                if latest_incoming and latest_incoming.created_at
                 else None,
                 "unread_count": unread_count,
                 "status": contact.status or "Active",
-                "isWindowOpen": True,
+                "isWindowOpen": _is_24_hour_window_open(
+                    latest_incoming.created_at if latest_incoming else None
+                ),
                 "contact_tags": contact_tags,
                 "created_at": contact.created_at.isoformat() if contact.created_at else None,
                 "updated_at": contact.updated_at.isoformat() if contact.updated_at else None,
@@ -289,6 +297,12 @@ def _normalize_phone(phone: str) -> str:
     return "".join(ch for ch in str(phone or "").replace("+", "") if ch.isdigit())
 
 
+def _is_24_hour_window_open(last_incoming_time: datetime | None) -> bool:
+    if not last_incoming_time:
+        return False
+    return datetime.utcnow() - last_incoming_time <= timedelta(hours=24)
+
+
 def get_chat_messages(db: Session, contact: str) -> dict:
     rows = db.execute(
         select(Message)
@@ -318,6 +332,14 @@ def send_live_chat_text(
     credential = get_whatsapp_credential(db)
     if not credential or not credential.token or not credential.phone_number_id:
         raise RuntimeError("WhatsApp credentials are not configured")
+    latest_incoming = db.execute(
+        select(Message)
+        .where(Message.phone == to_no, Message.direction == "incoming")
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    ).scalars().first()
+    if not _is_24_hour_window_open(latest_incoming.created_at if latest_incoming else None):
+        raise RuntimeError("24h window closed. Send template message only.")
 
     payload = {
         "messaging_product": "whatsapp",
