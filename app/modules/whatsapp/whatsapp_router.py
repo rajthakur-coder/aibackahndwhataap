@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
-from app.db.session import AsyncSessionLocal, get_db
+from app.db.session import AsyncSessionLocal, SessionLocal, get_db
 from app.models.whatsapp import Message, WebhookEvent
 from app.modules.whatsapp.core.live_chat_service import (
     assign_tags_to_contact,
@@ -382,19 +382,7 @@ async def mark_live_chat_message_read(request: Request, db: AsyncSession = Depen
 
 
 async def process_webhook_event_background(event_id: int) -> None:
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(WebhookEvent).where(WebhookEvent.id == event_id))
-        event = result.scalars().first()
-        if not event:
-            return
-        try:
-            await db.run_sync(
-                lambda sync_db: _process_webhook_event_sync(sync_db, event_id)
-            )
-        except Exception as exc:
-            await db.run_sync(
-                lambda sync_db: mark_webhook_event_failed(sync_db, sync_db.merge(event), exc)
-            )
+    await asyncio.to_thread(_process_webhook_event_with_session, event_id)
 
 
 def _process_webhook_event_sync(sync_db, event_id: int):
@@ -406,6 +394,19 @@ def _process_webhook_event_sync(sync_db, event_id: int):
     import asyncio
 
     return asyncio.run(process_webhook_event(event, sync_db))
+
+
+def _process_webhook_event_with_session(event_id: int) -> None:
+    with SessionLocal() as sync_db:
+        event = sync_db.execute(
+            select(WebhookEvent).where(WebhookEvent.id == event_id)
+        ).scalars().first()
+        if not event:
+            return
+        try:
+            _process_webhook_event_sync(sync_db, event_id)
+        except Exception as exc:
+            mark_webhook_event_failed(sync_db, event, exc)
 
 
 @whatsapp_router.post("/send-message")
@@ -529,9 +530,7 @@ async def retry_failed_webhook_events(
     errors = []
     for event in rows:
         try:
-            await db.run_sync(
-                lambda sync_db: _process_webhook_event_sync(sync_db, event.id)
-            )
+            await asyncio.to_thread(_process_webhook_event_with_session, event.id)
             retried += 1
         except Exception as exc:
             await db.run_sync(lambda sync_db: mark_webhook_event_failed(sync_db, sync_db.merge(event), exc))
