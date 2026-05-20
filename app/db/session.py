@@ -23,7 +23,7 @@ def _sync_database_url(database_url: str) -> str:
         if query.get("ssl") == "require":
             query.pop("ssl", None)
             query["sslmode"] = "require"
-        return str(url.set(query=query))
+        return url.set(query=query).render_as_string(hide_password=False)
     if database_url.startswith("postgresql+asyncpg://"):
         return database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
     if database_url.startswith("sqlite+aiosqlite:///"):
