@@ -1,5 +1,6 @@
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.config import settings
@@ -14,6 +15,15 @@ def _async_database_url(database_url: str) -> str:
 
 
 def _sync_database_url(database_url: str) -> str:
+    if database_url.startswith("postgresql://") or database_url.startswith("postgresql+asyncpg://"):
+        url = make_url(
+            database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+        )
+        query = dict(url.query)
+        if query.get("ssl") == "require":
+            query.pop("ssl", None)
+            query["sslmode"] = "require"
+        return str(url.set(query=query))
     if database_url.startswith("postgresql+asyncpg://"):
         return database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
     if database_url.startswith("sqlite+aiosqlite:///"):
