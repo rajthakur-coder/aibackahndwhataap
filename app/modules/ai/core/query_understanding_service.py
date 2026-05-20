@@ -1,10 +1,10 @@
 import json
-import os
 import re
 from dataclasses import dataclass, field
 
 import requests
 
+from app.config import settings
 from app.modules.ai.core.intelligence_service import detect_query_intent
 from app.modules.ai.core.sales_recommendations_service import extract_requested_limit, is_top_selling_request
 
@@ -61,7 +61,7 @@ def understand_message(message: str) -> QueryUnderstanding:
 
 
 def _llm_understanding(message: str) -> QueryUnderstanding | None:
-    api_key = os.getenv("OPENROUTER_API_KEY")
+    api_key = settings.openrouter_api_key
     if not api_key:
         return None
 
@@ -71,11 +71,11 @@ def _llm_understanding(message: str) -> QueryUnderstanding | None:
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": os.getenv("APP_URL", ""),
-                "X-Title": os.getenv("APP_NAME", "AI WhatsApp Automation"),
+                "HTTP-Referer": settings.app_url,
+                "X-Title": settings.app_name,
             },
             json={
-                "model": os.getenv("ROUTER_MODEL", os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")),
+                "model": settings.router_model or settings.openrouter_model or "openai/gpt-4o-mini",
                 "messages": [
                     {
                         "role": "system",

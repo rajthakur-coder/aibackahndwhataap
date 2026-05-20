@@ -1,9 +1,8 @@
-import os
-
 import requests
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.rag import ScrapedData
 from app.models.whatsapp import Message
 from app.modules.rag.core.rag_core_service import retrieve_relevant_context
@@ -52,8 +51,8 @@ def generate_ai_reply(
     tool_context: str = "",
     use_rag_fallback: bool = True,
 ) -> str:
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o")
+    api_key = settings.openrouter_api_key
+    model = settings.openrouter_model
 
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is not configured")
@@ -96,8 +95,8 @@ def generate_ai_reply(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": os.getenv("APP_URL", ""),
-            "X-Title": os.getenv("APP_NAME", "AI WhatsApp Automation"),
+            "HTTP-Referer": settings.app_url,
+            "X-Title": settings.app_name,
         },
         json={
             "model": model,

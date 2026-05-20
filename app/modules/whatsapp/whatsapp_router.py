@@ -1,5 +1,3 @@
-import os
-
 import requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
@@ -7,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from app.config import settings
 from app.db.session import AsyncSessionLocal, get_db
 from app.models.whatsapp import Message, WebhookEvent
 from app.modules.whatsapp.core.live_chat_service import (
@@ -429,7 +428,7 @@ async def verify_webhook(request: Request):
     mode = request.query_params.get("hub.mode")
     token = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
-    verify_token = os.getenv("VERIFY_TOKEN")
+    verify_token = settings.verify_token
 
     if mode == "subscribe" and token == verify_token and challenge:
         return PlainTextResponse(content=challenge)

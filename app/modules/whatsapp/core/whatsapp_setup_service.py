@@ -133,7 +133,7 @@ def _register_phone_number(phone_number_id: str, token: str) -> None:
     _post_graph(
         f"{settings.whatsapp_base_url}/{phone_number_id}/register",
         token=token,
-        data={"messaging_product": "whatsapp", "pin": "123456"},
+        data={"messaging_product": "whatsapp", "pin": "797711"},
     )
 
 

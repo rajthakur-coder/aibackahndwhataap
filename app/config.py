@@ -21,7 +21,13 @@ class Settings(BaseSettings):
     meta_app_id: str = ""
     meta_app_secret: str = ""
     whatsapp_base_url: str = "https://graph.facebook.com/v25.0"
+    access_token: str = ""
+    phone_number_id: str = ""
+    whatsapp_catalog_id: str = ""
     verify_token: str = ""
+    openrouter_api_key: str = ""
+    openrouter_model: str = "openai/gpt-4o"
+    router_model: str = ""
 
     ecommerce_auto_sync_enabled: bool = True
     ecommerce_auto_sync_interval_seconds: int = 300

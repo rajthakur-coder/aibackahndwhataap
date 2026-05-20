@@ -1,5 +1,4 @@
 import json
-import os
 import re
 from dataclasses import dataclass
 
@@ -7,6 +6,7 @@ import requests
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.ecommerce import EcommerceCustomer, EcommerceOrder, EcommerceProduct
 from app.models.rag import FAQ, Policy, Service, StructuredProduct
 from app.modules.ecommerce.core.ecommerce_core_service import order_status_text
@@ -72,7 +72,7 @@ def run_ai_tool(db: Session, phone: str, message: str, decision: ToolDecision | 
 
 
 def _llm_tool_decision(message: str) -> ToolDecision | None:
-    api_key = os.getenv("OPENROUTER_API_KEY")
+    api_key = settings.openrouter_api_key
     if not api_key:
         return None
     try:
@@ -81,11 +81,11 @@ def _llm_tool_decision(message: str) -> ToolDecision | None:
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": os.getenv("APP_URL", ""),
-                "X-Title": os.getenv("APP_NAME", "AI WhatsApp Automation"),
+                "HTTP-Referer": settings.app_url,
+                "X-Title": settings.app_name,
             },
             json={
-                "model": os.getenv("ROUTER_MODEL", os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")),
+                "model": settings.router_model or settings.openrouter_model or "openai/gpt-4o-mini",
                 "messages": [
                     {
                         "role": "system",

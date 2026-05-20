@@ -1,6 +1,6 @@
-import os
-
 import requests
+
+from app.config import settings
 
 
 WHATSAPP_API_VERSION = "v25.0"
@@ -8,8 +8,8 @@ REQUEST_TIMEOUT = 20
 
 
 def send_whatsapp_message(phone: str, message: str) -> dict:
-    access_token = os.getenv("ACCESS_TOKEN")
-    phone_number_id = os.getenv("PHONE_NUMBER_ID")
+    access_token = settings.access_token
+    phone_number_id = settings.phone_number_id
 
     if not access_token or not phone_number_id:
         raise RuntimeError("WhatsApp credentials are not configured")
@@ -43,8 +43,8 @@ def send_whatsapp_message(phone: str, message: str) -> dict:
 
 
 def send_whatsapp_image(phone: str, image_url: str, caption: str | None = None) -> dict:
-    access_token = os.getenv("ACCESS_TOKEN")
-    phone_number_id = os.getenv("PHONE_NUMBER_ID")
+    access_token = settings.access_token
+    phone_number_id = settings.phone_number_id
 
     if not access_token or not phone_number_id:
         raise RuntimeError("WhatsApp credentials are not configured")
@@ -89,9 +89,9 @@ def send_whatsapp_product_list(
     section_title: str = "Recommended",
     footer_text: str | None = None,
 ) -> dict:
-    access_token = os.getenv("ACCESS_TOKEN")
-    phone_number_id = os.getenv("PHONE_NUMBER_ID")
-    catalog_id = os.getenv("WHATSAPP_CATALOG_ID")
+    access_token = settings.access_token
+    phone_number_id = settings.phone_number_id
+    catalog_id = settings.whatsapp_catalog_id
 
     if not access_token or not phone_number_id:
         raise RuntimeError("WhatsApp credentials are not configured")
@@ -157,8 +157,8 @@ def send_whatsapp_template(
     language: str = "en",
     body_parameters: list[str] | None = None,
 ) -> dict:
-    access_token = os.getenv("ACCESS_TOKEN")
-    phone_number_id = os.getenv("PHONE_NUMBER_ID")
+    access_token = settings.access_token
+    phone_number_id = settings.phone_number_id
 
     if not access_token or not phone_number_id:
         raise RuntimeError("WhatsApp credentials are not configured")
