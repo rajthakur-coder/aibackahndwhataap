@@ -226,7 +226,13 @@ def required_shopify_scopes() -> list[str]:
 def fetch_shopify_access_scopes(connection: EcommerceConnection) -> list[str]:
     if connection.platform != "shopify":
         return []
-    response = _shopify_request("GET", connection, "/oauth/access_scopes.json")
+    domain = connection.myshopify_domain or connection.store_url
+    response = requests.get(
+        f"https://{domain}/admin/oauth/access_scopes.json",
+        headers=_shopify_headers(connection),
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
     scopes = response.json().get("access_scopes", [])
     return [
         str(scope.get("handle") or "").strip()
