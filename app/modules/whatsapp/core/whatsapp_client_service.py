@@ -156,6 +156,7 @@ def send_whatsapp_template(
     template_name: str,
     language: str = "en",
     body_parameters: list[str] | None = None,
+    button_url_parameters: list[str] | None = None,
 ) -> dict:
     access_token = settings.access_token
     phone_number_id = settings.phone_number_id
@@ -176,7 +177,7 @@ def send_whatsapp_template(
         "language": {"code": language or "en"},
     }
     if body_parameters:
-        template["components"] = [
+        template.setdefault("components", []).append(
             {
                 "type": "body",
                 "parameters": [
@@ -184,7 +185,16 @@ def send_whatsapp_template(
                     for value in body_parameters
                 ],
             }
-        ]
+        )
+    for index, value in enumerate(button_url_parameters or []):
+        template.setdefault("components", []).append(
+            {
+                "type": "button",
+                "sub_type": "url",
+                "index": str(index),
+                "parameters": [{"type": "text", "text": str(value)[:1024]}],
+            }
+        )
 
     payload = {
         "messaging_product": "whatsapp",

@@ -13,15 +13,17 @@ from app.modules.ai.core.sales_recommendations_service import is_sales_recommend
 from app.modules.ecommerce.core.ecommerce_core_service import (
     _normalize_order,
     _normalize_product,
+    fetch_all_products,
     fetch_order_by_number,
     fetch_orders,
-    fetch_products,
+    fetch_orders_for_sales,
 )
 from app.shared.redis import get_redis
 
 
-PRODUCT_CACHE_LIMIT = 250
+PRODUCT_CATALOG_CACHE_LIMIT = 5000
 ORDER_CACHE_LIMIT = 100
+TOP_SELLING_ORDER_LIMIT = 500
 ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*id)?[\s:#-]*#?([A-Za-z0-9-]{2,})\b", re.I)
 TOKEN_RE = re.compile(r"[a-zA-Z0-9]+")
 IMAGE_REQUEST_TERMS = {
@@ -91,6 +93,31 @@ async def find_cached_shopify_product_recommendations(
     return products
 
 
+async def find_cached_shopify_top_selling_products(
+    db: Session,
+    limit: int = 3,
+) -> list[dict]:
+    connection = _active_shopify_connection(db)
+    if not connection:
+        return []
+
+    limit = max(1, min(limit, 10))
+    cache_key = f"shopify:top-selling:v1:{connection.id}:limit:{limit}"
+    cached = await _redis_get_json(cache_key)
+    if isinstance(cached, list):
+        return cached
+
+    orders = await _cached_shopify_sales_orders(db)
+    if not orders:
+        return []
+
+    products = await _cached_all_shopify_products(db)
+    ranked = _top_selling_from_orders(orders, products, limit)
+    if ranked:
+        await _redis_set_json(cache_key, ranked, settings.shopify_query_cache_ttl_seconds)
+    return ranked
+
+
 async def find_cached_shopify_catalog_products(
     db: Session,
     query: str,
@@ -156,17 +183,21 @@ async def _rank_cached_shopify_products(
 
 
 async def _cached_shopify_products(db: Session) -> list[dict]:
+    return await _cached_all_shopify_products(db)
+
+
+async def _cached_all_shopify_products(db: Session) -> list[dict]:
     connection = _active_shopify_connection(db)
     if not connection:
         return []
 
-    cache_key = f"shopify:products:v1:{connection.id}"
+    cache_key = f"shopify:products:all:v1:{connection.id}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
 
     try:
-        raw_products = await run_in_threadpool(fetch_products, connection, PRODUCT_CACHE_LIMIT)
+        raw_products = await run_in_threadpool(fetch_all_products, connection, PRODUCT_CATALOG_CACHE_LIMIT)
     except Exception:
         return []
 
@@ -187,6 +218,26 @@ async def _cached_shopify_orders(db: Session) -> list[dict]:
 
     try:
         raw_orders = await run_in_threadpool(fetch_orders, connection, ORDER_CACHE_LIMIT)
+    except Exception:
+        return []
+
+    orders = [_normalize_order(connection, order) for order in raw_orders]
+    await _redis_set_json(cache_key, orders, settings.shopify_order_cache_ttl_seconds)
+    return orders
+
+
+async def _cached_shopify_sales_orders(db: Session) -> list[dict]:
+    connection = _active_shopify_connection(db)
+    if not connection:
+        return []
+
+    cache_key = f"shopify:orders:sales:v1:{connection.id}"
+    cached = await _redis_get_json(cache_key)
+    if isinstance(cached, list):
+        return cached
+
+    try:
+        raw_orders = await run_in_threadpool(fetch_orders_for_sales, connection, TOP_SELLING_ORDER_LIMIT)
     except Exception:
         return []
 
@@ -266,6 +317,80 @@ def _matching_order(orders: list[dict], phone: str, order_id: str | None) -> dic
 
 def _digits(value: str | None) -> str:
     return re.sub(r"\D+", "", value or "")
+
+
+def _top_selling_from_orders(orders: list[dict], products: list[dict], limit: int) -> list[dict]:
+    products_by_id = {
+        str(product.get("shopify_product_id") or product.get("external_id") or ""): product
+        for product in products
+        if product.get("shopify_product_id") or product.get("external_id")
+    }
+    products_by_sku = {
+        str(product.get("sku") or "").strip().lower(): product
+        for product in products
+        if product.get("sku")
+    }
+    products_by_title = {
+        str(product.get("title") or "").strip().lower(): product
+        for product in products
+        if product.get("title")
+    }
+    sales: dict[tuple[str, str], dict] = {}
+
+    for order in orders:
+        for item in order.get("items") or []:
+            quantity = _quantity(item.get("quantity"))
+            if quantity <= 0:
+                continue
+            product_id = str(item.get("product_id") or "").strip()
+            sku = str(item.get("sku") or "").strip()
+            name = str(item.get("name") or "").strip()
+            if product_id:
+                key = ("product_id", product_id)
+            elif sku:
+                key = ("sku", sku.lower())
+            elif name:
+                key = ("name", name.lower())
+            else:
+                continue
+
+            row = sales.setdefault(key, {"quantity": 0, "product_id": product_id, "sku": sku, "name": name})
+            row["quantity"] += quantity
+
+    ranked = []
+    for (_key_type, key_value), row in sorted(sales.items(), key=lambda item: item[1]["quantity"], reverse=True):
+        product = (
+            products_by_id.get(str(row.get("product_id") or ""))
+            or products_by_sku.get(str(row.get("sku") or "").lower())
+            or products_by_title.get(str(row.get("name") or "").lower())
+        )
+        if product:
+            result = dict(product)
+        else:
+            result = {
+                "source": "shopify_orders_api",
+                "title": row.get("name") or key_value,
+                "sku": row.get("sku"),
+                "shopify_product_id": row.get("product_id"),
+                "price": "",
+                "price_min": "",
+                "price_max": "",
+                "product_url": None,
+                "image_url": None,
+                "caption": row.get("name") or key_value,
+            }
+        result["sales_count"] = row["quantity"]
+        ranked.append(result)
+        if len(ranked) >= limit:
+            break
+    return ranked
+
+
+def _quantity(value) -> int:
+    try:
+        return max(0, int(float(value or 0)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _order_status_text(order: dict) -> str:

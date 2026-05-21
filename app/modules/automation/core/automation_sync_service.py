@@ -32,56 +32,84 @@ DEFAULT_RULES = [
     {
         "name": "Order Confirmation",
         "trigger": TRIGGER_ORDER_CREATED,
+        "template_name": "order_confirmation",
+        "body_variable_order": ["customer_name", "order_number", "total", "currency"],
         "message_body": (
-            "Hi {{customer_name}}, your order {{order_number}} is confirmed. "
-            "Total: {{total}} {{currency}}. We will update you when it ships."
+            "Hi {{customer_name}}, your order {{order_number}} is confirmed. Total amount is "
+            "{{total}} {{currency}}. We will update you when it ships."
         ),
         "delay_seconds": 0,
     },
     {
         "name": "COD Verification",
         "trigger": TRIGGER_COD_VERIFICATION,
+        "template_name": "cod_verification",
+        "body_variable_order": ["customer_name", "order_number", "total", "currency"],
         "message_body": (
             "Hi {{customer_name}}, please reply YES to confirm your COD order "
-            "{{order_number}} worth {{total}} {{currency}}."
+            "{{order_number}} worth {{total}} {{currency}} today."
         ),
         "delay_seconds": 0,
     },
     {
         "name": "Shipping Update",
         "trigger": TRIGGER_ORDER_SHIPPED,
+        "template_name": "shipping_update",
+        "body_variable_order": ["customer_name", "order_number"],
+        "button_variable_order": ["order_number"],
         "message_body": (
             "Good news {{customer_name}}, your order {{order_number}} has shipped. "
-            "Tracking: {{tracking_url}}"
+            "Tap the button below to track your order."
         ),
         "delay_seconds": 0,
     },
     {
         "name": "Delivered Follow-up",
         "trigger": TRIGGER_ORDER_DELIVERED,
+        "template_name": "delivered_followup",
+        "body_variable_order": ["customer_name", "order_number"],
         "message_body": (
-            "Thank you {{customer_name}}! Your order {{order_number}} has been delivered. "
-            "Reply with your feedback, or type YES to see matching recommendations."
+            "Thank you {{customer_name}}! Your order {{order_number}} has been delivered successfully. "
+            "Reply with your feedback."
         ),
         "delay_seconds": 0,
     },
     {
         "name": "Abandoned Cart Recovery",
         "trigger": TRIGGER_CART_ABANDONED,
+        "template_name": "abandoned_cart_recovery",
+        "body_variable_order": ["customer_name"],
+        "button_variable_order": ["cart_token"],
         "message_body": (
-            "Hi {{customer_name}}, you left items in your cart. Complete your order here: "
-            "{{cart_url}}"
+            "Hi {{customer_name}}, you left items in your cart. Tap the button below to complete your order."
         ),
         "delay_seconds": 900,
     },
     {
         "name": "Feedback Request",
         "trigger": TRIGGER_FEEDBACK_REQUEST,
+        "template_name": "feedback_request",
+        "body_variable_order": ["customer_name", "order_number"],
         "message_body": (
             "Hi {{customer_name}}, how was your experience with order {{order_number}}? "
             "Reply with a rating from 1 to 5."
         ),
         "delay_seconds": 86400,
+    },
+]
+
+DEFAULT_MARKETING_TEMPLATES = [
+    {
+        "name": "Product Recommendation",
+        "template_name": "product_recommendation",
+        "body_variable_order": ["customer_name"],
+        "message_body": "Hi {{customer_name}}, we found some products you may like. Reply YES to see recommendations now.",
+    },
+    {
+        "name": "Sale Offer",
+        "template_name": "sale_offer",
+        "body_variable_order": ["customer_name"],
+        "message_body": "Hi {{customer_name}}, our latest offers are live. Reply YES to explore today's deals now.",
     },
 ]
 
@@ -96,24 +124,72 @@ def db_to_bool(value: str | None) -> bool:
 
 def ensure_default_automation_rules(db: Session) -> dict:
     created = 0
+    templates_created = 0
+    templates_updated = 0
     for rule_data in DEFAULT_RULES:
+        template, template_created, template_updated = _ensure_message_template(db, rule_data)
+        templates_created += int(template_created)
+        templates_updated += int(template_updated)
         exists = db.execute(
             select(AutomationRule).where(AutomationRule.name == rule_data["name"])
         ).scalars().first()
         if exists:
+            if exists.message_template_id != template.id:
+                exists.message_template_id = template.id
+                exists.message_body = None
+                exists.delay_seconds = rule_data["delay_seconds"]
+                exists.enabled = "true"
             continue
         db.add(
             AutomationRule(
                 name=rule_data["name"],
                 trigger=rule_data["trigger"],
-                message_body=rule_data["message_body"],
+                message_template_id=template.id,
+                message_body=None,
                 delay_seconds=rule_data["delay_seconds"],
                 enabled="true",
             )
         )
         created += 1
+    for template_data in DEFAULT_MARKETING_TEMPLATES:
+        _template, template_created, template_updated = _ensure_message_template(db, template_data)
+        templates_created += int(template_created)
+        templates_updated += int(template_updated)
     db.commit()
-    return {"status": "success", "created": created}
+    return {
+        "status": "success",
+        "created": created,
+        "templates_created": templates_created,
+        "templates_updated": templates_updated,
+    }
+
+
+def _ensure_message_template(db: Session, data: dict) -> tuple[MessageTemplate, bool, bool]:
+    provider_name = data["template_name"]
+    row = db.execute(
+        select(MessageTemplate).where(MessageTemplate.name == provider_name)
+    ).scalars().first()
+    created = False
+    updated = False
+    if not row:
+        row = MessageTemplate(name=provider_name, body=data["message_body"])
+        db.add(row)
+        created = True
+    desired_order = json.dumps(data.get("body_variable_order") or [], ensure_ascii=True)
+    for field, value in {
+        "body": data["message_body"],
+        "channel": "whatsapp",
+        "template_type": "whatsapp_template",
+        "provider_template_name": provider_name,
+        "language": "en",
+        "body_variable_order": desired_order,
+        "status": "active",
+    }.items():
+        if getattr(row, field) != value:
+            setattr(row, field, value)
+            updated = True
+    db.flush()
+    return row, created, updated and not created
 
 
 def _load_json(value: str | None, fallback: Any) -> Any:
@@ -255,6 +331,25 @@ def _template_body_parameters(template: MessageTemplate, context: dict) -> list[
     return values
 
 
+def _template_button_parameters(template: MessageTemplate, context: dict) -> list[str]:
+    template_name = template.provider_template_name or template.name
+    button_orders = {
+        "shipping_update": ["order_number"],
+        "abandoned_cart_recovery": ["cart_token"],
+    }
+    values = []
+    for variable in button_orders.get(template_name, []):
+        value = _get_path(context, variable)
+        if value is None and variable == "cart_token":
+            value = context.get("external_id") or context.get("cart_url")
+        if value is None:
+            value = ""
+        if variable == "order_number":
+            value = str(value).lstrip("#")
+        values.append(str(value))
+    return values
+
+
 def _send_rule_message(
     db: Session,
     rule: AutomationRule,
@@ -270,6 +365,7 @@ def _send_rule_message(
             template_name,
             language=template.language or "en",
             body_parameters=_template_body_parameters(template, context),
+            button_url_parameters=_template_button_parameters(template, context),
         )
     return send_whatsapp_message(phone, rendered_message)
 
@@ -278,12 +374,23 @@ def _message_context(event: AutomationEvent) -> dict:
     payload = _load_json(event.payload, {})
     if not isinstance(payload, dict):
         payload = {}
-    return {
+    context = {
         **payload,
+        "external_id": event.external_id or payload.get("external_id") or "",
         "phone": event.phone or payload.get("phone") or "",
         "trigger": event.trigger,
         "source": event.source,
     }
+    if not context.get("cart_token"):
+        context["cart_token"] = context.get("external_id") or _last_url_segment(context.get("cart_url"))
+    return context
+
+
+def _last_url_segment(value: str | None) -> str:
+    text = str(value or "").rstrip("/")
+    if not text:
+        return ""
+    return text.rsplit("/", 1)[-1]
 
 
 def create_automation_event(

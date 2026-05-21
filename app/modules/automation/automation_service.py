@@ -86,25 +86,7 @@ def _template_parameters(template: MessageTemplate, context: dict) -> list[str]:
 
 
 async def seed_default_automations(db: AsyncSession) -> dict:
-    created = 0
-    for rule_data in sync_automation.DEFAULT_RULES:
-        result = await db.execute(
-            select(AutomationRule).where(AutomationRule.name == rule_data["name"])
-        )
-        if result.scalar_one_or_none():
-            continue
-        db.add(
-            AutomationRule(
-                name=rule_data["name"],
-                trigger=rule_data["trigger"],
-                message_body=rule_data["message_body"],
-                delay_seconds=rule_data["delay_seconds"],
-                enabled="true",
-            )
-        )
-        created += 1
-    await db.commit()
-    return {"status": "success", "created": created}
+    return await db.run_sync(sync_automation.ensure_default_automation_rules)
 
 
 async def create_message_template(db: AsyncSession, data: MessageTemplateRequest) -> dict:
@@ -163,6 +145,7 @@ async def send_template_test(
             template.provider_template_name or template.name,
             template.language or "en",
             _template_parameters(template, data.context),
+            sync_automation._template_button_parameters(template, data.context),
         )
     else:
         response = await run_in_threadpool(send_whatsapp_message, data.phone, rendered)
@@ -372,10 +355,13 @@ async def _process_event(db: AsyncSession, event: AutomationEvent) -> dict:
         payload = {}
     payload = {
         **payload,
+        "external_id": event.external_id or payload.get("external_id") or "",
         "phone": event.phone or payload.get("phone") or "",
         "trigger": event.trigger,
         "source": event.source,
     }
+    if not payload.get("cart_token"):
+        payload["cart_token"] = payload.get("external_id") or str(payload.get("cart_url") or "").rstrip("/").rsplit("/", 1)[-1]
 
     result = await db.execute(
         select(AutomationRule)
@@ -506,5 +492,6 @@ async def _send_message(
             template.provider_template_name or template.name,
             template.language or "en",
             _template_parameters(template, context),
+            sync_automation._template_button_parameters(template, context),
         )
     return await run_in_threadpool(send_whatsapp_message, phone, message)

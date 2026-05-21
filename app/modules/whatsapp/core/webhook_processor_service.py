@@ -18,7 +18,6 @@ from app.modules.ai.core.openai_chat_service import generate_ai_reply
 from app.modules.ai.core.query_understanding_service import understand_message
 from app.modules.ai.core.sales_recommendations_service import (
     extract_requested_limit,
-    find_top_selling_products,
     is_top_selling_request,
     recommendation_caption,
     recommendation_intro,
@@ -28,6 +27,7 @@ from app.modules.ecommerce.core.shopify_cache_service import (
     find_cached_shopify_order_status,
     find_cached_shopify_product_image,
     find_cached_shopify_product_recommendations,
+    find_cached_shopify_top_selling_products,
 )
 from app.modules.whatsapp.core.whatsapp_client_service import send_whatsapp_image, send_whatsapp_message, send_whatsapp_product_list
 
@@ -159,7 +159,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
             agent_state["reply_override"] = shopify_order_reply
     requested_limit = _requested_limit_from_understanding(understanding, query_text)
     if is_top_selling_request(query_text) or understanding.intent == "top_selling_products":
-        top_selling_products = find_top_selling_products(db, limit=requested_limit)
+        top_selling_products = await find_cached_shopify_top_selling_products(db, limit=requested_limit)
         if top_selling_products:
             remember_last_products(db, phone, top_selling_products)
             product_list_sent = await _try_send_product_list(

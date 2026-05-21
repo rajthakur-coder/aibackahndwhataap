@@ -337,6 +337,41 @@ def fetch_orders(connection: EcommerceConnection, limit: int = 50) -> list[dict]
     return response.json()
 
 
+def fetch_orders_for_sales(connection: EcommerceConnection, limit: int = 500) -> list[dict]:
+    limit = max(1, min(limit, 500))
+    if connection.platform == "shopify":
+        orders = []
+        page_info = None
+        fields = (
+            "id,name,email,phone,tags,note,subtotal_price,total_price,total_discounts,total_tax,"
+            "currency,financial_status,fulfillment_status,line_items,shipping_address,billing_address,"
+            "customer,fulfillments,payment_gateway_names,created_at,updated_at"
+        )
+        while len(orders) < limit:
+            params = {
+                "status": "any",
+                "limit": min(250, limit - len(orders)),
+                "fields": fields,
+            }
+            if page_info:
+                params = {"limit": min(250, limit - len(orders)), "page_info": page_info}
+            response = _shopify_request("GET", connection, "/orders.json", params=params)
+            orders.extend(response.json().get("orders", []))
+            page_info = _next_page_info(response)
+            if not page_info:
+                break
+        return orders[:limit]
+
+    response = requests.get(
+        f"{_woocommerce_base_url(connection)}/orders",
+        auth=(connection.consumer_key or "", connection.consumer_secret or ""),
+        params={"per_page": 100, "orderby": "date", "order": "desc"},
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()[:limit]
+
+
 def fetch_order_by_number(connection: EcommerceConnection, order_number: str) -> dict | None:
     clean_order_number = str(order_number or "").strip().lstrip("#")
     if not clean_order_number:
@@ -371,6 +406,41 @@ def fetch_order_by_number(connection: EcommerceConnection, order_number: str) ->
         if str(order.get("number") or order.get("id") or "").lstrip("#") == clean_order_number:
             return order
     return None
+
+
+def fetch_all_products(connection: EcommerceConnection, limit: int = 5000) -> list[dict]:
+    limit = max(1, min(limit, 5000))
+    if connection.platform == "shopify":
+        products = []
+        page_info = None
+        fields = "id,title,handle,body_html,vendor,product_type,tags,status,variants,images,options,created_at,updated_at"
+        while len(products) < limit:
+            params = {"limit": min(250, limit - len(products)), "fields": fields}
+            if page_info:
+                params = {"limit": min(250, limit - len(products)), "page_info": page_info}
+            response = _shopify_request("GET", connection, "/products.json", params=params)
+            products.extend(response.json().get("products", []))
+            page_info = _next_page_info(response)
+            if not page_info:
+                break
+        return products[:limit]
+
+    products = []
+    page = 1
+    while len(products) < limit:
+        response = requests.get(
+            f"{_woocommerce_base_url(connection)}/products",
+            auth=(connection.consumer_key or "", connection.consumer_secret or ""),
+            params={"per_page": min(100, limit - len(products)), "page": page, "orderby": "date", "order": "desc"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        batch = response.json()
+        if not batch:
+            break
+        products.extend(batch)
+        page += 1
+    return products[:limit]
 
 
 def fetch_products(connection: EcommerceConnection, limit: int = 100) -> list[dict]:
