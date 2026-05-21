@@ -315,7 +315,7 @@ async def _redis_get_json(key: str):
     try:
         redis = await get_redis()
         value = await redis.get(key)
-    except RedisError:
+    except (RedisError, RuntimeError, OSError):
         return None
     if not value:
         return None
@@ -329,5 +329,5 @@ async def _redis_set_json(key: str, value, ttl_seconds: int) -> None:
     try:
         redis = await get_redis()
         await redis.setex(key, max(1, ttl_seconds), json.dumps(value, ensure_ascii=True))
-    except RedisError:
+    except (RedisError, RuntimeError, OSError):
         return

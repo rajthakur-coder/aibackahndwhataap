@@ -1,22 +1,27 @@
+import asyncio
+from weakref import WeakKeyDictionary
+
 from redis import asyncio as aioredis
 
 from app.config import settings
 
 
-_redis_client: aioredis.Redis | None = None
+_redis_clients: WeakKeyDictionary[asyncio.AbstractEventLoop, aioredis.Redis] = WeakKeyDictionary()
 
 
 async def get_redis() -> aioredis.Redis:
-    """Get or create a shared Redis client connection."""
-    global _redis_client
-    if _redis_client is None:
-        _redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
-    return _redis_client
+    """Get or create a Redis client for the current event loop."""
+    loop = asyncio.get_running_loop()
+    redis = _redis_clients.get(loop)
+    if redis is None:
+        redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        _redis_clients[loop] = redis
+    return redis
 
 
 async def close_redis() -> None:
-    """Close the shared Redis client connection."""
-    global _redis_client
-    if _redis_client is not None:
-        await _redis_client.aclose()
-        _redis_client = None
+    """Close Redis clients created for active event loops."""
+    clients = list(_redis_clients.values())
+    _redis_clients.clear()
+    for redis in clients:
+        await redis.aclose()
