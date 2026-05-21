@@ -1,6 +1,7 @@
 from app.modules.ecommerce.core.ecommerce_core_service import (
     create_connection,
     cross_sell_text,
+    fetch_order_by_number,
     fetch_orders,
     fetch_products,
     fetch_customers,
@@ -42,6 +43,7 @@ __all__ = [
     "create_connection",
     "cross_sell_text",
     "ecommerce_auto_sync_loop",
+    "fetch_order_by_number",
     "fetch_orders",
     "fetch_products",
     "fetch_customers",

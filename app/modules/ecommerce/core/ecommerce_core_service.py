@@ -337,6 +337,42 @@ def fetch_orders(connection: EcommerceConnection, limit: int = 50) -> list[dict]
     return response.json()
 
 
+def fetch_order_by_number(connection: EcommerceConnection, order_number: str) -> dict | None:
+    clean_order_number = str(order_number or "").strip().lstrip("#")
+    if not clean_order_number:
+        return None
+
+    if connection.platform == "shopify":
+        fields = (
+            "id,name,email,phone,tags,note,subtotal_price,total_price,total_discounts,total_tax,"
+            "currency,financial_status,fulfillment_status,line_items,shipping_address,billing_address,"
+            "customer,fulfillments,payment_gateway_names,created_at,updated_at"
+        )
+        for name in (f"#{clean_order_number}", clean_order_number):
+            response = _shopify_request(
+                "GET",
+                connection,
+                "/orders.json",
+                params={"status": "any", "limit": 1, "name": name, "fields": fields},
+            )
+            orders = response.json().get("orders", [])
+            if orders:
+                return orders[0]
+        return None
+
+    response = requests.get(
+        f"{_woocommerce_base_url(connection)}/orders",
+        auth=(connection.consumer_key or "", connection.consumer_secret or ""),
+        params={"search": clean_order_number, "per_page": 10, "orderby": "date", "order": "desc"},
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    for order in response.json():
+        if str(order.get("number") or order.get("id") or "").lstrip("#") == clean_order_number:
+            return order
+    return None
+
+
 def fetch_products(connection: EcommerceConnection, limit: int = 100) -> list[dict]:
     limit = max(1, min(limit, 250))
     if connection.platform == "shopify":

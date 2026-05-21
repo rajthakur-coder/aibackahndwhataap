@@ -10,7 +10,13 @@ from app.config import settings
 from app.models.ecommerce import EcommerceConnection
 from app.modules.ai.core.product_search_service import product_search_text, score_search_text, search_terms
 from app.modules.ai.core.sales_recommendations_service import is_sales_recommendation_request
-from app.modules.ecommerce.core.ecommerce_core_service import _normalize_order, _normalize_product, fetch_orders, fetch_products
+from app.modules.ecommerce.core.ecommerce_core_service import (
+    _normalize_order,
+    _normalize_product,
+    fetch_order_by_number,
+    fetch_orders,
+    fetch_products,
+)
 from app.shared.redis import get_redis
 
 
@@ -60,11 +66,12 @@ async def find_cached_shopify_order_status(
     if isinstance(cached, str):
         return cached
 
-    orders = await _cached_shopify_orders(db)
-    if not orders:
-        return None
-
-    order = _matching_order(orders, phone, order_id)
+    order = await _cached_shopify_order_by_id(db, order_id) if order_id else None
+    if not order:
+        orders = await _cached_shopify_orders(db)
+        if not orders:
+            return None
+        order = _matching_order(orders, phone, order_id)
     if not order:
         return None
 
@@ -186,6 +193,29 @@ async def _cached_shopify_orders(db: Session) -> list[dict]:
     orders = [_normalize_order(connection, order) for order in raw_orders]
     await _redis_set_json(cache_key, orders, settings.shopify_order_cache_ttl_seconds)
     return orders
+
+
+async def _cached_shopify_order_by_id(db: Session, order_id: str | None) -> dict | None:
+    connection = _active_shopify_connection(db)
+    if not connection or not order_id:
+        return None
+
+    normalized_order_id = order_id.lstrip("#").upper()
+    cache_key = f"shopify:order:v1:{connection.id}:{normalized_order_id}"
+    cached = await _redis_get_json(cache_key)
+    if isinstance(cached, dict):
+        return cached
+
+    try:
+        raw_order = await run_in_threadpool(fetch_order_by_number, connection, normalized_order_id)
+    except Exception:
+        return None
+    if not raw_order:
+        return None
+
+    order = _normalize_order(connection, raw_order)
+    await _redis_set_json(cache_key, order, settings.shopify_order_cache_ttl_seconds)
+    return order
 
 
 def _active_shopify_connection(db: Session) -> EcommerceConnection | None:
