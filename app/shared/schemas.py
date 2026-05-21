@@ -20,7 +20,6 @@ from app.modules.ecommerce.ecommerce_schema import (
     EcommerceProductSyncRequest,
     EcommerceSyncRequest,
 )
-from app.modules.rag.rag_schema import DocumentRequest, ScrapeRequest
 from app.modules.whatsapp.whatsapp_schema import (
     RetryWebhookEventsRequest,
     SendMessageRequest,
@@ -33,7 +32,6 @@ __all__ = [
     "AutomationRuleRequest",
     "AutomationRuleUpdateRequest",
     "DeliveredFollowupRequest",
-    "DocumentRequest",
     "EcommerceConnectionRequest",
     "EcommerceConnectionUpdateRequest",
     "EcommerceProductSyncRequest",
@@ -41,7 +39,6 @@ __all__ = [
     "MessageTemplateRequest",
     "OrderRequest",
     "RetryWebhookEventsRequest",
-    "ScrapeRequest",
     "SendMessageRequest",
     "SendTemplateRequest",
 ]

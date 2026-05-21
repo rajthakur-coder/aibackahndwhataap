@@ -11,9 +11,14 @@ class Settings(BaseSettings):
     app_url: str = ""
     public_webhook_base_url: str = ""
     shopify_webhook_secret: str = ""
+    shopify_required_scopes: str = (
+        "read_products,read_inventory,read_orders,read_customers,"
+        "read_checkouts,read_fulfillments,read_locations"
+    )
     ecommerce_token_secret: str = ""
     cors_origins: list[str] = ["*"]
     database_url: str = "sqlite:///./app.db"
+    redis_url: str = "redis://localhost:6379/0"
     debug: str | bool = False
     port: int = 8000
     init_db_on_startup: bool = True
@@ -34,6 +39,9 @@ class Settings(BaseSettings):
     ecommerce_auto_sync_limit: int = 50
     ecommerce_auto_sync_products_enabled: bool = True
     ecommerce_auto_sync_product_limit: int = 100
+    shopify_product_cache_ttl_seconds: int = 300
+    shopify_query_cache_ttl_seconds: int = 300
+    shopify_order_cache_ttl_seconds: int = 60
     automation_processor_enabled: bool = True
     automation_processor_interval_seconds: int = 60
     automation_processor_limit: int = 50
@@ -48,6 +56,18 @@ class Settings(BaseSettings):
     @property
     def DATABASE_URI(self) -> str:
         return self.database_url
+
+    @property
+    def REDIS_URL(self) -> str:
+        return self.redis_url
+
+    @property
+    def SHOPIFY_REQUIRED_SCOPES(self) -> list[str]:
+        return [
+            scope.strip()
+            for scope in self.shopify_required_scopes.split(",")
+            if scope.strip()
+        ]
 
     @property
     def DEBUG(self) -> bool:

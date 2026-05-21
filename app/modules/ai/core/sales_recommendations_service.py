@@ -6,7 +6,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ecommerce import EcommerceOrder, EcommerceProduct
-from app.models.rag import StructuredProduct
 from app.modules.ai.core.intelligence_service import detect_query_intent
 from app.modules.ai.core.product_search_service import score_search_text, search_terms
 
@@ -233,7 +232,7 @@ def find_product_recommendations(db: Session, query: str, limit: int = 5) -> lis
 
     budget = extract_budget(query)
     query_terms = search_terms(query)
-    candidates = _ecommerce_candidates(db) + _structured_candidates(db)
+    candidates = _ecommerce_candidates(db)
     scored = []
 
     for product in candidates:
@@ -334,28 +333,6 @@ def _ecommerce_candidates(db: Session) -> list[dict]:
                 "external_id": row.external_id,
                 "shopify_product_id": row.shopify_product_id,
                 "retailer_id": _first_retailer_id(row),
-            }
-        )
-    return candidates
-
-
-def _structured_candidates(db: Session) -> list[dict]:
-    rows = db.execute(
-        select(StructuredProduct).order_by(StructuredProduct.created_at.desc()).limit(300)
-    ).scalars().all()
-    candidates = []
-    for row in rows:
-        image_urls = _json_list(row.image_urls)
-        candidates.append(
-            {
-                "source": "structured",
-                "title": row.title,
-                "description": row.description,
-                "category": row.category,
-                "brand": row.brand,
-                "price": row.price,
-                "product_url": row.source_url,
-                "image_url": image_urls[0] if image_urls else None,
             }
         )
     return candidates

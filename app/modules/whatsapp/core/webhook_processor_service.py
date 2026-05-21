@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 
 from sqlalchemy import select
@@ -6,20 +7,17 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.models.crm import AgentAction
+from app.models.ecommerce import EcommerceProduct
 from app.models.whatsapp import WebhookEvent
 from app.modules.crm.core.crm_agent_service import process_agent_message
 from app.modules.ai.core.ai_tools_service import ToolDecision, decide_tool_for_message, run_ai_tool
+from app.modules.ai.core.product_search_service import product_search_text, score_search_text, search_terms
 from app.modules.crm.core.conversation_memory_service import remember_last_products, remember_last_question
 from app.modules.whatsapp.core.messages_service import save_message
 from app.modules.whatsapp.core.live_chat_service import serialize_message
 from app.modules.whatsapp.core.live_chat_socket import live_chat_manager
 from app.modules.ai.core.openai_chat_service import generate_ai_reply
 from app.modules.ai.core.query_understanding_service import understand_message
-from app.modules.rag.core.rag_core_service import (
-    find_relevant_catalog_products,
-    find_relevant_product_image,
-    find_relevant_website_images,
-)
 from app.modules.ai.core.sales_recommendations_service import (
     extract_requested_limit,
     find_cross_sell_products,
@@ -29,7 +27,31 @@ from app.modules.ai.core.sales_recommendations_service import (
     recommendation_caption,
     recommendation_intro,
 )
+from app.modules.ecommerce.core.shopify_cache_service import (
+    find_cached_shopify_catalog_products,
+    find_cached_shopify_order_status,
+    find_cached_shopify_product_image,
+    find_cached_shopify_product_recommendations,
+)
 from app.modules.whatsapp.core.whatsapp_client_service import send_whatsapp_image, send_whatsapp_message, send_whatsapp_product_list
+
+
+IMAGE_REQUEST_TERMS = {
+    "image",
+    "images",
+    "photo",
+    "photos",
+    "pic",
+    "picture",
+    "tasveer",
+    "tasvir",
+    "dikha",
+    "dikhana",
+    "dikhao",
+    "bhejo",
+}
+CATALOG_REQUEST_TERMS = {"catalog", "catalogue", "products", "product", "collection", "items", "list", "menu"}
+REQUEST_ACTION_TERMS = {"bhejo", "chahiye", "chaiye", "dekhna", "dikha", "dikhana", "dikhao", "send", "show"}
 
 
 def parse_whatsapp_messages(payload: dict) -> list[dict]:
@@ -135,6 +157,10 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
     db.commit()
 
     agent_state = process_agent_message(db, phone, query_text)
+    if agent_state["intent"] == "order_status":
+        shopify_order_reply = await find_cached_shopify_order_status(db, phone, query_text)
+        if shopify_order_reply:
+            agent_state["reply_override"] = shopify_order_reply
     requested_limit = _requested_limit_from_understanding(understanding, query_text)
     if is_top_selling_request(query_text) or understanding.intent == "top_selling_products":
         top_selling_products = find_top_selling_products(db, limit=requested_limit)
@@ -189,7 +215,13 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         _mark_processed(db, event)
         return
 
-    recommended_products = find_product_recommendations(db, query_text, limit=requested_limit)
+    recommended_products = await find_cached_shopify_product_recommendations(
+        db,
+        query_text,
+        limit=requested_limit,
+    )
+    if not recommended_products:
+        recommended_products = find_product_recommendations(db, query_text, limit=requested_limit)
     if recommended_products:
         remember_last_products(db, phone, recommended_products)
         product_list_sent = await _try_send_product_list(
@@ -238,7 +270,13 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         _mark_processed(db, event)
         return
 
-    catalog_products = find_relevant_catalog_products(db, query_text, limit=requested_limit)
+    catalog_products = await find_cached_shopify_catalog_products(
+        db,
+        query_text,
+        limit=requested_limit,
+    )
+    if not catalog_products:
+        catalog_products = _find_database_catalog_products(db, query_text, limit=requested_limit)
     if catalog_products:
         remember_last_products(db, phone, catalog_products)
         product_list_sent = await _try_send_product_list(
@@ -301,7 +339,9 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         _mark_processed(db, event)
         return
 
-    product_image = find_relevant_product_image(db, query_text)
+    product_image = await find_cached_shopify_product_image(db, query_text)
+    if not product_image:
+        product_image = _find_database_product_image(db, query_text)
     if product_image:
         remember_last_products(db, phone, [product_image])
         product_list_sent = await _try_send_product_list(
@@ -351,51 +391,6 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         _mark_processed(db, event)
         return
 
-    website_images = find_relevant_website_images(db, query_text, limit=2)
-    if website_images:
-        remember_last_products(db, phone, website_images)
-        sent_count = 0
-        failed_images = []
-        for website_image in website_images:
-            try:
-                await run_in_threadpool(
-                    send_whatsapp_image,
-                    phone,
-                    website_image["image_url"],
-                    website_image["caption"],
-                )
-                save_message(db, phone, f"[image] {website_image['caption']}", "outgoing")
-                sent_count += 1
-            except Exception as exc:
-                failed_images.append(website_image)
-                db.add(
-                    AgentAction(
-                        phone=phone,
-                        action_type="website_image_send_failed",
-                        status="failed",
-                        payload=json.dumps(
-                            {
-                                "title": website_image["title"],
-                                "page_url": website_image["page_url"],
-                                "image_url": website_image["image_url"],
-                            }
-                        ),
-                        result=json.dumps({"error": str(exc)}),
-                    )
-                )
-                db.commit()
-
-        if sent_count == 0:
-            fallback_lines = ["Image send nahi ho payi, yeh image links dekh sakte hain:"]
-            for image in failed_images[:3]:
-                fallback_lines.append(f"{image['title']}\n{image['image_url']}")
-            fallback_text = "\n\n".join(fallback_lines)
-            await run_in_threadpool(send_whatsapp_message, phone, fallback_text)
-            save_message(db, phone, fallback_text, "outgoing")
-
-        _mark_processed(db, event)
-        return
-
     ai_reply = agent_state["reply_override"]
     if not ai_reply:
         if understanding.confidence >= 0.45 and understanding.tool:
@@ -414,7 +409,6 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
                         "normalized_query": query_text,
                         "tool": tool_result["tool"],
                         "reason": tool_result["reason"],
-                        "needs_rag": tool_result["needs_rag"],
                     }
                 ),
                 result=json.dumps({"data_count": len(tool_result.get("data") or [])}),
@@ -427,7 +421,6 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
             text,
             agent_context=_understanding_context(understanding, agent_state["context"]),
             tool_context=tool_result["context"],
-            use_rag_fallback=tool_result["needs_rag"],
         )
     await run_in_threadpool(send_whatsapp_message, phone, ai_reply)
     save_message(db, phone, ai_reply, "outgoing")
@@ -459,6 +452,116 @@ def _understanding_context(understanding, agent_context: str) -> str:
     if agent_context:
         parts.append(agent_context)
     return "\n".join(parts)
+
+
+def _find_database_catalog_products(db: Session, query: str, limit: int = 5) -> list[dict]:
+    if not _looks_like_catalog_request(query):
+        return []
+    query_terms = search_terms(query)
+    products = db.execute(
+        select(EcommerceProduct).order_by(EcommerceProduct.updated_at.desc()).limit(400)
+    ).scalars().all()
+    scored = [
+        (score_search_text(query_terms, product_search_text(product)), product)
+        for product in products
+    ]
+    ranked = [
+        product
+        for score, product in sorted(scored, key=lambda item: item[0], reverse=True)
+        if score > 0
+    ]
+    if not ranked:
+        ranked = [product for _score, product in sorted(scored, key=lambda item: item[0], reverse=True)]
+    return [_product_result(product) for product in ranked[: max(1, min(limit, 10))]]
+
+
+def _find_database_product_image(db: Session, query: str) -> dict | None:
+    if not _looks_like_image_request(query):
+        return None
+    query_terms = search_terms(query)
+    products = db.execute(
+        select(EcommerceProduct).order_by(EcommerceProduct.updated_at.desc()).limit(400)
+    ).scalars().all()
+    scored = [
+        (score_search_text(query_terms, product_search_text(product)), product)
+        for product in products
+        if _product_image_urls(product)
+    ]
+    if not scored:
+        return None
+    ranked = [
+        product
+        for score, product in sorted(scored, key=lambda item: item[0], reverse=True)
+        if score > 0
+    ]
+    product = ranked[0] if ranked else sorted(scored, key=lambda item: item[0], reverse=True)[0][1]
+    return _product_result(product)
+
+
+def _product_result(product: EcommerceProduct) -> dict:
+    image_urls = _product_image_urls(product)
+    return {
+        "title": product.title,
+        "product_url": product.product_url,
+        "price_min": product.price_min,
+        "price_max": product.price_max,
+        "image_url": image_urls[0] if image_urls else None,
+        "caption": _product_caption(product),
+        "sku": product.sku,
+        "external_id": product.external_id,
+        "shopify_product_id": product.shopify_product_id,
+        "retailer_id": _first_retailer_id(product),
+    }
+
+
+def _product_image_urls(product: EcommerceProduct) -> list[str]:
+    try:
+        image_urls = json.loads(product.image_urls or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [url for url in image_urls if isinstance(url, str) and url.startswith("http")]
+
+
+def _product_caption(product: EcommerceProduct) -> str:
+    parts = [product.title]
+    if product.price_min:
+        price = product.price_min
+        if product.price_max and product.price_max != product.price_min:
+            price = f"{product.price_min} - {product.price_max}"
+        parts.append(f"Price: {price}")
+    if product.product_url:
+        parts.append(product.product_url)
+    return "\n".join(parts)
+
+
+def _first_retailer_id(product: EcommerceProduct) -> str | None:
+    skus = []
+    if product.sku:
+        skus.extend(part.strip() for part in product.sku.split(",") if part.strip())
+    try:
+        skus.extend(
+            sku
+            for sku in json.loads(product.skus or "[]")
+            if isinstance(sku, str) and sku.strip()
+        )
+    except json.JSONDecodeError:
+        pass
+    if skus:
+        return sorted(set(skus))[0]
+    return product.external_id or product.shopify_product_id
+
+
+def _looks_like_catalog_request(query: str) -> bool:
+    terms = _request_terms(query)
+    return bool(terms & CATALOG_REQUEST_TERMS and terms & REQUEST_ACTION_TERMS)
+
+
+def _looks_like_image_request(query: str) -> bool:
+    return bool(_request_terms(query) & IMAGE_REQUEST_TERMS)
+
+
+def _request_terms(query: str) -> set[str]:
+    return {token.lower() for token in re.findall(r"[a-zA-Z0-9]+", query or "")}
 
 
 async def _try_send_product_list(

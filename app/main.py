@@ -18,7 +18,6 @@ from app.modules.ecommerce.ecommerce_router import (
     shopify_webhooks_router,
 )
 from app.modules.ecommerce.ecommerce_service import ecommerce_auto_sync_loop
-from app.modules.rag.rag_router import rag_router
 from app.modules.system.system_router import system_router
 from app.modules.whatsapp.whatsapp_router import whatsapp_router
 
@@ -26,7 +25,6 @@ from app.modules.whatsapp.whatsapp_router import whatsapp_router
 ROUTERS = [
     system_router,
     whatsapp_router,
-    rag_router,
     ecommerce_router,
     shopify_webhooks_router,
     automation_router,

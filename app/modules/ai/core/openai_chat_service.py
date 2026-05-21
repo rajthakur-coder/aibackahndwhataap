@@ -3,9 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.rag import ScrapedData
 from app.models.whatsapp import Message
-from app.modules.rag.core.rag_core_service import retrieve_relevant_context
 
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -28,28 +26,12 @@ def _recent_conversation(db: Session, phone: str) -> list[dict]:
     return history
 
 
-def _latest_scraped_context(db: Session) -> str:
-    rows = db.execute(
-        select(ScrapedData)
-        .order_by(ScrapedData.created_at.desc())
-        .limit(3)
-    ).scalars().all()
-
-    sections = []
-    for row in rows:
-        content = row.content[:2000]
-        sections.append(f"Source: {row.url}\n{content}")
-
-    return "\n\n".join(sections)[:6000]
-
-
 def generate_ai_reply(
     db: Session,
     phone: str,
     user_message: str,
     agent_context: str = "",
     tool_context: str = "",
-    use_rag_fallback: bool = True,
 ) -> str:
     api_key = settings.openrouter_api_key
     model = settings.openrouter_model
@@ -58,22 +40,10 @@ def generate_ai_reply(
         raise RuntimeError("OPENROUTER_API_KEY is not configured")
 
     context = tool_context.strip()
-    rag_context = ""
-    if use_rag_fallback and not context:
-        rag_context = retrieve_relevant_context(db, user_message)
-        context = rag_context
-    elif use_rag_fallback:
-        rag_context = retrieve_relevant_context(db, user_message)
-        if rag_context:
-            context = f"{context}\n\nFallback knowledge context:\n{rag_context}".strip()
-
-    if not context:
-        context = _latest_scraped_context(db)
 
     system_prompt = (
         "You are an advanced WhatsApp AI agent. Reply clearly and briefly. "
-        "Use structured database/tool context first when it is provided. "
-        "Use fallback knowledge context only when the database/tool context is not enough. "
+        "Use only structured database/tool context when it is provided. "
         "Use customer memory and intent context to personalize the response. "
         "Ask for missing details when an action needs more information. "
         "If the answer is not available in the context, say that you do not "

@@ -7,47 +7,9 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.db.session import AsyncSessionLocal
-from app.models.ecommerce import EcommerceConnection, EcommerceProduct, ShopifyWebhookEvent
+from app.models.ecommerce import EcommerceConnection, ShopifyWebhookEvent
 from app.models.crm import AgentAction
-from app.models.rag import KnowledgeDocument
-from app.modules.ecommerce.core.ecommerce_core_service import product_knowledge_text, sync_customers, sync_orders, sync_products
-from app.modules.rag.core.rag_core_service import save_knowledge_chunks, save_knowledge_document
-
-
-def sync_product_catalog_knowledge(
-    db: Session,
-    connection: EcommerceConnection,
-    limit: int,
-) -> dict:
-    products = db.execute(
-        select(EcommerceProduct)
-        .where(EcommerceProduct.connection_id == connection.id)
-        .order_by(EcommerceProduct.updated_at.desc())
-        .limit(max(1, min(limit, 250)))
-    ).scalars().all()
-    source = f"ecommerce://{connection.platform}/{connection.id}/products"
-    content = "\n\n---\n\n".join(product_knowledge_text(product) for product in products)
-    if not content:
-        return {"knowledge_source": source, "knowledge_products": 0}
-
-    document = db.execute(
-        select(KnowledgeDocument).where(KnowledgeDocument.source == source)
-    ).scalars().first()
-    if document:
-        document.title = f"{connection.name} product catalog"
-        document.content = content
-        db.commit()
-        db.refresh(document)
-        save_knowledge_chunks(db, document)
-    else:
-        save_knowledge_document(
-            db,
-            title=f"{connection.name} product catalog",
-            source=source,
-            content=content,
-        )
-
-    return {"knowledge_source": source, "knowledge_products": len(products)}
+from app.modules.ecommerce.core.ecommerce_core_service import sync_customers, sync_inventory, sync_orders, sync_products
 
 
 def sync_active_ecommerce_connections_with_session(db: Session) -> dict:
@@ -68,13 +30,12 @@ def sync_active_ecommerce_connections_with_session(db: Session) -> dict:
                     connection,
                     settings.ecommerce_auto_sync_product_limit,
                 )
-                product_result.update(
-                    sync_product_catalog_knowledge(
+                if connection.platform == "shopify":
+                    product_result["inventory"] = sync_inventory(
                         db,
                         connection,
                         settings.ecommerce_auto_sync_product_limit,
                     )
-                )
                 result["products"] = product_result
             if connection.platform == "shopify":
                 result["customers"] = sync_customers(db, connection, settings.ecommerce_auto_sync_limit)

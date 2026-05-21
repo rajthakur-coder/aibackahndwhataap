@@ -219,6 +219,35 @@ def _shopify_request(
     return response
 
 
+def required_shopify_scopes() -> list[str]:
+    return settings.SHOPIFY_REQUIRED_SCOPES
+
+
+def fetch_shopify_access_scopes(connection: EcommerceConnection) -> list[str]:
+    if connection.platform != "shopify":
+        return []
+    response = _shopify_request("GET", connection, "/oauth/access_scopes.json")
+    scopes = response.json().get("access_scopes", [])
+    return [
+        str(scope.get("handle") or "").strip()
+        for scope in scopes
+        if isinstance(scope, dict) and scope.get("handle")
+    ]
+
+
+def validate_shopify_scopes(connection: EcommerceConnection) -> dict:
+    required = required_shopify_scopes()
+    granted = fetch_shopify_access_scopes(connection)
+    granted_set = set(granted)
+    missing = [scope for scope in required if scope not in granted_set]
+    return {
+        "status": "ok" if not missing else "missing_scopes",
+        "required": required,
+        "granted": granted,
+        "missing": missing,
+    }
+
+
 def _next_page_info(response: requests.Response) -> str | None:
     link_header = response.headers.get("Link")
     if not link_header:
@@ -254,7 +283,13 @@ def test_connection(connection: EcommerceConnection) -> dict:
         db_session = getattr(connection, "_sa_instance_state", None)
         if db_session:
             pass
-        return {"ok": True, "platform": "shopify", "store": shop.get("name") or connection.store_url}
+        scopes = validate_shopify_scopes(connection)
+        return {
+            "ok": scopes["status"] == "ok",
+            "platform": "shopify",
+            "store": shop.get("name") or connection.store_url,
+            "scopes": scopes,
+        }
 
     response = requests.get(
         f"{_woocommerce_base_url(connection)}/system_status",
@@ -323,6 +358,72 @@ def fetch_products(connection: EcommerceConnection, limit: int = 100) -> list[di
     )
     response.raise_for_status()
     return response.json()
+
+
+def fetch_locations(connection: EcommerceConnection) -> list[dict]:
+    if connection.platform != "shopify":
+        return []
+    response = _shopify_request("GET", connection, "/locations.json")
+    return response.json().get("locations", [])
+
+
+def fetch_inventory_levels(
+    connection: EcommerceConnection,
+    inventory_item_ids: list[str] | None = None,
+    location_ids: list[str] | None = None,
+    limit: int = 250,
+) -> list[dict]:
+    if connection.platform != "shopify":
+        return []
+    params = {"limit": max(1, min(limit, 250))}
+    if inventory_item_ids:
+        params["inventory_item_ids"] = ",".join(str(item_id) for item_id in inventory_item_ids if item_id)
+    if location_ids:
+        params["location_ids"] = ",".join(str(location_id) for location_id in location_ids if location_id)
+    if not params.get("inventory_item_ids") and not params.get("location_ids"):
+        locations = fetch_locations(connection)
+        params["location_ids"] = ",".join(str(location.get("id")) for location in locations if location.get("id"))
+    if not params.get("inventory_item_ids") and not params.get("location_ids"):
+        return []
+
+    levels = []
+    page_info = None
+    while True:
+        request_params = {"limit": params["limit"], "page_info": page_info} if page_info else params
+        response = _shopify_request("GET", connection, "/inventory_levels.json", params=request_params)
+        levels.extend(response.json().get("inventory_levels", []))
+        page_info = _next_page_info(response)
+        if not page_info:
+            break
+    return levels
+
+
+def fetch_abandoned_checkouts(connection: EcommerceConnection, limit: int = 50) -> list[dict]:
+    if connection.platform != "shopify":
+        return []
+    checkouts = []
+    page_info = None
+    while len(checkouts) < max(1, min(limit, 250)):
+        params = {
+            "limit": min(250, max(1, min(limit, 250)) - len(checkouts)),
+            "status": "open",
+            "fields": "id,token,email,phone,abandoned_checkout_url,total_price,currency,line_items,customer,shipping_address,billing_address,created_at,updated_at",
+        }
+        if page_info:
+            params = {"limit": min(250, max(1, min(limit, 250)) - len(checkouts)), "page_info": page_info}
+        response = _shopify_request("GET", connection, "/checkouts.json", params=params)
+        checkouts.extend(response.json().get("checkouts", []))
+        page_info = _next_page_info(response)
+        if not page_info:
+            break
+    return checkouts[: max(1, min(limit, 250))]
+
+
+def fetch_fulfillments(connection: EcommerceConnection, order_id: str) -> list[dict]:
+    if connection.platform != "shopify":
+        return []
+    response = _shopify_request("GET", connection, f"/orders/{order_id}/fulfillments.json")
+    return response.json().get("fulfillments", [])
 
 
 def fetch_customers(connection: EcommerceConnection, limit: int = 100) -> list[dict]:
@@ -548,12 +649,121 @@ def sync_products(db: Session, connection: EcommerceConnection, limit: int = 100
     return {"status": "success", "fetched": len(products), "synced": len(synced)}
 
 
+def sync_inventory(db: Session, connection: EcommerceConnection, limit: int = 100) -> dict:
+    if connection.platform != "shopify":
+        return {"status": "skipped", "reason": "inventory sync is only available for Shopify"}
+
+    products = fetch_products(connection, limit=limit)
+    inventory_item_to_product: dict[str, str] = {}
+    for product in products:
+        product_id = str(product.get("id") or "")
+        for variant in product.get("variants") or []:
+            inventory_item_id = variant.get("inventory_item_id")
+            if inventory_item_id and product_id:
+                inventory_item_to_product[str(inventory_item_id)] = product_id
+
+    if not inventory_item_to_product:
+        return {"status": "success", "inventory_items": 0, "updated_products": 0}
+
+    locations = fetch_locations(connection)
+    location_names = {
+        str(location.get("id")): location.get("name") or str(location.get("id"))
+        for location in locations
+        if location.get("id")
+    }
+
+    product_totals: dict[str, int] = {}
+    product_locations: dict[str, list[str]] = {}
+    inventory_item_ids = list(inventory_item_to_product)
+    for index in range(0, len(inventory_item_ids), 50):
+        chunk = inventory_item_ids[index : index + 50]
+        for level in fetch_inventory_levels(connection, inventory_item_ids=chunk):
+            product_id = inventory_item_to_product.get(str(level.get("inventory_item_id") or ""))
+            if not product_id:
+                continue
+            available = _int_value(level.get("available"))
+            product_totals[product_id] = product_totals.get(product_id, 0) + available
+            location_id = str(level.get("location_id") or "")
+            location_name = location_names.get(location_id, location_id)
+            if location_name:
+                product_locations.setdefault(product_id, []).append(f"{location_name}: {available}")
+
+    updated = 0
+    for product_id, total in product_totals.items():
+        row = db.execute(
+            select(EcommerceProduct).where(
+                EcommerceProduct.connection_id == connection.id,
+                EcommerceProduct.external_id == product_id,
+            )
+        ).scalars().first()
+        if not row:
+            continue
+        detail = "; ".join(product_locations.get(product_id, [])[:8])
+        row.inventory = f"total: {total}" + (f"; {detail}" if detail else "")
+        updated += 1
+
+    connection.last_sync_at = datetime.utcnow()
+    db.commit()
+    return {
+        "status": "success",
+        "inventory_items": len(inventory_item_ids),
+        "locations": len(locations),
+        "updated_products": updated,
+    }
+
+
+def sync_abandoned_checkouts(db: Session, connection: EcommerceConnection, limit: int = 50) -> dict:
+    if connection.platform != "shopify":
+        return {"status": "skipped", "reason": "checkout sync is only available for Shopify"}
+
+    from app.modules.automation.core.automation_sync_service import create_abandoned_cart_event
+
+    checkouts = fetch_abandoned_checkouts(connection, limit=limit)
+    queued = 0
+    skipped = 0
+    for checkout in checkouts:
+        payload = _abandoned_checkout_payload(checkout)
+        if not payload.get("phone"):
+            skipped += 1
+            continue
+        create_abandoned_cart_event(db, payload=payload, source="shopify_checkouts_api")
+        queued += 1
+    return {"status": "success", "fetched": len(checkouts), "queued": queued, "skipped": skipped}
+
+
 def sync_customers(db: Session, connection: EcommerceConnection, limit: int = 100) -> dict:
     customers = fetch_customers(connection, limit=limit)
     synced = [upsert_customer(db, connection, customer) for customer in customers]
     connection.last_sync_at = datetime.utcnow()
     db.commit()
     return {"status": "success", "fetched": len(customers), "synced": len([row for row in synced if row])}
+
+
+def _abandoned_checkout_payload(checkout: dict) -> dict:
+    customer = checkout.get("customer") or {}
+    shipping = checkout.get("shipping_address") or {}
+    billing = checkout.get("billing_address") or {}
+    first = shipping.get("first_name") or billing.get("first_name") or customer.get("first_name") or ""
+    last = shipping.get("last_name") or billing.get("last_name") or customer.get("last_name") or ""
+    return {
+        "external_id": str(checkout.get("id") or checkout.get("token") or ""),
+        "phone": checkout.get("phone")
+        or shipping.get("phone")
+        or billing.get("phone")
+        or customer.get("phone"),
+        "customer_name": " ".join([first, last]).strip() or customer.get("email") or "there",
+        "cart_url": checkout.get("abandoned_checkout_url") or checkout.get("cart_url") or checkout.get("web_url") or "",
+        "total": str(checkout.get("total_price") or checkout.get("total") or ""),
+        "currency": checkout.get("currency") or "",
+        "items": checkout.get("line_items") or checkout.get("items") or [],
+    }
+
+
+def _int_value(value) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def register_shopify_webhooks(db: Session, connection: EcommerceConnection) -> dict:
@@ -607,6 +817,18 @@ def bootstrap_shopify_connection(db: Session, connection: EcommerceConnection) -
         result["test"] = test_connection(connection)
         db.commit()
         db.refresh(connection)
+        if connection.platform == "shopify" and result["test"].get("scopes", {}).get("missing"):
+            connection.status = "missing_scopes"
+            db.add(
+                AgentAction(
+                    action_type="shopify_connection_missing_scopes",
+                    status="failed",
+                    payload=_json_dumps({"connection_id": connection.id, "store_url": connection.store_url}),
+                    result=_json_dumps(result["test"]["scopes"]),
+                )
+            )
+            db.commit()
+            return result
     except Exception as exc:
         connection.status = "failed"
         db.add(
@@ -623,6 +845,7 @@ def bootstrap_shopify_connection(db: Session, connection: EcommerceConnection) -
     bootstrap_steps = [
         ("orders", lambda: sync_orders(db, connection, 50)),
         ("products", lambda: sync_products(db, connection, 100)),
+        ("inventory", lambda: sync_inventory(db, connection, 100)),
         ("customers", lambda: sync_customers(db, connection, 100)),
     ]
     for step_name, step in bootstrap_steps:
@@ -639,22 +862,6 @@ def bootstrap_shopify_connection(db: Session, connection: EcommerceConnection) -
                 )
             )
             db.commit()
-
-    try:
-        from app.modules.ecommerce.core.ecommerce_sync_service import sync_product_catalog_knowledge
-
-        result["knowledge"] = sync_product_catalog_knowledge(db, connection, 100)
-    except Exception as exc:
-        result["knowledge"] = {"status": "skipped", "error": str(exc)}
-        db.add(
-            AgentAction(
-                action_type="shopify_bootstrap_knowledge_skipped",
-                status="skipped",
-                payload=_json_dumps({"connection_id": connection.id}),
-                result=_json_dumps({"error": str(exc)}),
-            )
-        )
-        db.commit()
 
     try:
         result["webhooks"] = register_shopify_webhooks(db, connection)

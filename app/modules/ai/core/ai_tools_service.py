@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.ecommerce import EcommerceCustomer, EcommerceOrder, EcommerceProduct
-from app.models.rag import FAQ, Policy, Service, StructuredProduct
 from app.modules.ecommerce.core.ecommerce_core_service import order_status_text
 from app.modules.ai.core.intelligence_service import detect_query_intent
 from app.modules.ai.core.product_search_service import product_search_text, score_search_text, search_terms
@@ -46,7 +45,7 @@ def decide_tool_for_message(message: str) -> ToolDecision:
         return ToolDecision("search_products", "product/catalog intent")
     if intent.name in {"policy_question", "faq_question"}:
         return ToolDecision("get_policy_or_faq", "policy/faq intent")
-    return ToolDecision("search_knowledge", "fallback knowledge search")
+    return ToolDecision("search_knowledge", "fallback database search")
 
 
 def run_ai_tool(db: Session, phone: str, message: str, decision: ToolDecision | None = None) -> dict:
@@ -57,17 +56,16 @@ def run_ai_tool(db: Session, phone: str, message: str, decision: ToolDecision | 
         "get_customer_profile": _customer_context,
         "get_policy_or_faq": _policy_faq_context,
         "get_services": _service_context,
-        "search_knowledge": _knowledge_hint_context,
+        "search_knowledge": _database_hint_context,
         "general_reply": _general_context,
     }
-    handler = handlers.get(decision.name, _knowledge_hint_context)
+    handler = handlers.get(decision.name, _database_hint_context)
     result = handler(db, phone, message)
     return {
         "tool": decision.name,
         "reason": decision.reason,
         "context": result.get("context", ""),
         "data": result.get("data", []),
-        "needs_rag": result.get("needs_rag", False),
     }
 
 
@@ -93,7 +91,8 @@ def _llm_tool_decision(message: str) -> ToolDecision | None:
                             "Choose one tool for this WhatsApp ecommerce message. "
                             "Return only JSON: {\"tool\":\"name\",\"reason\":\"short\"}. "
                             "Allowed tools: get_order_status, search_products, get_customer_profile, "
-                            "get_policy_or_faq, get_services, search_knowledge, general_reply."
+                            "get_policy_or_faq, get_services, search_knowledge, general_reply. "
+                            "Use search_knowledge only for normal database lookup."
                         ),
                     },
                     {"role": "user", "content": message},
@@ -174,7 +173,7 @@ def _product_context(db: Session, _phone: str, message: str) -> dict:
         if score > 0
     ][:6]
     if not products:
-        return {"context": "No matching products found in ecommerce database.", "data": [], "needs_rag": True}
+        return {"context": "No matching products found in ecommerce database.", "data": []}
     lines = []
     for product in products:
         price = product.price_min or ""
@@ -218,63 +217,27 @@ def _customer_context(db: Session, phone: str, _message: str) -> dict:
 
 
 def _policy_faq_context(db: Session, _phone: str, message: str) -> dict:
-    terms = [term for term in re.findall(r"[a-zA-Z0-9]+", message.lower()) if len(term) > 2]
-    sections = []
-    if terms:
-        filters = []
-        for term in terms[:6]:
-            like = f"%{term}%"
-            filters.extend([Policy.title.ilike(like), Policy.content.ilike(like), Policy.policy_type.ilike(like)])
-        policies = db.execute(
-            select(Policy).where(or_(*filters)).order_by(Policy.created_at.desc()).limit(4)
-        ).scalars().all()
-    else:
-        policies = db.execute(
-            select(Policy).order_by(Policy.created_at.desc()).limit(4)
-        ).scalars().all()
-    for row in policies:
-        sections.append(f"Policy: {row.title or row.policy_type}\nType: {row.policy_type}\n{row.content[:1000]}")
-
-    faq_filters = []
-    for term in terms[:6]:
-        like = f"%{term}%"
-        faq_filters.extend([FAQ.question.ilike(like), FAQ.answer.ilike(like), FAQ.category.ilike(like)])
-    faqs = (
-        db.execute(
-            select(FAQ).where(or_(*faq_filters)).order_by(FAQ.created_at.desc()).limit(4)
-        ).scalars().all()
-        if faq_filters
-        else []
-    )
-    for row in faqs:
-        sections.append(f"FAQ: {row.question}\nAnswer: {row.answer[:800]}")
-
-    return {"context": "\n\n".join(sections), "data": [], "needs_rag": not bool(sections)}
+    return _product_context(db, _phone, message)
 
 
 def _service_context(db: Session, _phone: str, message: str) -> dict:
-    terms = [term for term in re.findall(r"[a-zA-Z0-9]+", message.lower()) if len(term) > 2]
-    statement = select(Service)
-    if terms:
-        filters = []
-        for term in terms[:6]:
-            like = f"%{term}%"
-            filters.extend([Service.name.ilike(like), Service.description.ilike(like), Service.category.ilike(like)])
-        statement = statement.where(or_(*filters))
-    rows = db.execute(statement.order_by(Service.created_at.desc()).limit(5)).scalars().all()
-    sections = [f"Service: {row.name}\nPrice: {row.price or 'not listed'}\n{row.description or ''}" for row in rows]
-    return {"context": "\n\n".join(sections), "data": [], "needs_rag": not bool(sections)}
+    return _product_context(db, _phone, message)
 
 
-def _knowledge_hint_context(db: Session, _phone: str, message: str) -> dict:
-    structured = []
-    products = db.execute(
-        select(StructuredProduct).order_by(StructuredProduct.created_at.desc()).limit(3)
+def _database_hint_context(db: Session, _phone: str, message: str) -> dict:
+    sections = []
+    ecommerce_products = db.execute(
+        select(EcommerceProduct).order_by(EcommerceProduct.updated_at.desc()).limit(3)
     ).scalars().all()
-    for row in products:
-        structured.append(f"Structured product: {row.title}\nPrice: {row.price or 'not listed'}\n{row.description or ''}")
-    return {"context": "\n\n".join(structured), "data": [], "needs_rag": True}
+    for row in ecommerce_products:
+        sections.append(
+            f"Ecommerce product: {row.title}\n"
+            f"Price: {row.price_min or 'not listed'}\n"
+            f"URL: {row.product_url or 'not available'}\n"
+            f"{(row.description or '')[:700]}"
+        )
+    return {"context": "\n\n".join(sections), "data": []}
 
 
 def _general_context(_db: Session, _phone: str, _message: str) -> dict:
-    return {"context": "", "data": [], "needs_rag": False}
+    return {"context": "", "data": []}

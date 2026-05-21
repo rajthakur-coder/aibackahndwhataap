@@ -16,15 +16,6 @@ from app.models.ecommerce import EcommerceCustomer
 from app.models.ecommerce import EcommerceOrder
 from app.models.ecommerce import EcommerceProduct
 from app.models.ecommerce import ShopifyWebhookEvent
-from app.models.rag import FAQ
-from app.models.rag import KnowledgeChunk
-from app.models.rag import KnowledgeDocument
-from app.models.rag import Policy
-from app.models.rag import ScrapedChunk
-from app.models.rag import ScrapedData
-from app.models.rag import ScrapeJob
-from app.models.rag import Service
-from app.models.rag import StructuredProduct
 from app.models.whatsapp import Message
 from app.models.whatsapp import WebhookEvent
 from app.models.whatsapp import WhatsappCredential

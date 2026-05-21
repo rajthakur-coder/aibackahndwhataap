@@ -31,18 +31,22 @@ from app.modules.ecommerce.ecommerce_schema import (
 )
 from app.modules.ecommerce.ecommerce_service import (
     create_connection,
+    fetch_fulfillments,
+    fetch_locations,
     find_shopify_connection_by_domain,
     mark_shopify_webhook_event,
     record_shopify_webhook_event,
     send_delivered_followups,
+    sync_abandoned_checkouts,
     sync_active_ecommerce_connections,
+    sync_inventory,
     sync_orders,
-    sync_product_catalog_knowledge,
     sync_products,
     test_connection,
     update_connection,
     upsert_order as upsert_ecommerce_order,
     upsert_product,
+    validate_shopify_scopes,
     verify_shopify_hmac,
 )
 from app.modules.ecommerce.core.ecommerce_core_service import bootstrap_shopify_connection
@@ -146,6 +150,21 @@ async def check_ecommerce_connection(connection_id: int, db: AsyncSession = Depe
     return await db.run_sync(sync_op)
 
 
+@ecommerce_router.get("/connections/{connection_id}/shopify-scopes")
+@ecommerce_router.post("/connections/{connection_id}/verify-scopes")
+async def verify_ecommerce_shopify_scopes(connection_id: int, db: AsyncSession = Depends(get_db)):
+    def sync_op(sync_db: Session):
+        connection = _connection_or_404(sync_db, connection_id)
+        if connection.platform != "shopify":
+            raise HTTPException(status_code=400, detail="Scope verification is only available for Shopify")
+        try:
+            return validate_shopify_scopes(connection)
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return await db.run_sync(sync_op)
+
+
 @ecommerce_router.post("/connections/{connection_id}/sync-orders")
 async def sync_ecommerce_orders(
     connection_id: int,
@@ -171,9 +190,70 @@ async def sync_ecommerce_products(
     def sync_op(sync_db: Session):
         connection = _connection_or_404(sync_db, connection_id)
         try:
-            result = sync_products(sync_db, connection, data.limit)
-            result.update(sync_product_catalog_knowledge(sync_db, connection, data.limit))
-            return result
+            return sync_products(sync_db, connection, data.limit)
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return await db.run_sync(sync_op)
+
+
+@ecommerce_router.post("/connections/{connection_id}/sync-inventory")
+async def sync_ecommerce_inventory(
+    connection_id: int,
+    data: EcommerceProductSyncRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    def sync_op(sync_db: Session):
+        connection = _connection_or_404(sync_db, connection_id)
+        try:
+            return sync_inventory(sync_db, connection, data.limit)
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return await db.run_sync(sync_op)
+
+
+@ecommerce_router.post("/connections/{connection_id}/sync-checkouts")
+async def sync_ecommerce_checkouts(
+    connection_id: int,
+    data: EcommerceSyncRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    def sync_op(sync_db: Session):
+        connection = _connection_or_404(sync_db, connection_id)
+        try:
+            return sync_abandoned_checkouts(sync_db, connection, data.limit)
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return await db.run_sync(sync_op)
+
+
+@ecommerce_router.get("/connections/{connection_id}/locations")
+async def get_ecommerce_locations(connection_id: int, db: AsyncSession = Depends(get_db)):
+    def sync_op(sync_db: Session):
+        connection = _connection_or_404(sync_db, connection_id)
+        try:
+            return {"status": "success", "locations": fetch_locations(connection)}
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return await db.run_sync(sync_op)
+
+
+@ecommerce_router.get("/connections/{connection_id}/orders/{shopify_order_id}/fulfillments")
+async def get_ecommerce_order_fulfillments(
+    connection_id: int,
+    shopify_order_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    def sync_op(sync_db: Session):
+        connection = _connection_or_404(sync_db, connection_id)
+        try:
+            return {
+                "status": "success",
+                "fulfillments": fetch_fulfillments(connection, shopify_order_id),
+            }
         except requests.RequestException as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -321,7 +401,6 @@ async def shopify_products_webhook(
         product_payload = body.get("product") if isinstance(body, dict) and isinstance(body.get("product"), dict) else body
         try:
             product = upsert_product(sync_db, connection, product_payload)
-            sync_product_catalog_knowledge(sync_db, connection, 250)
             mark_shopify_webhook_event(sync_db, event, "processed")
             return {"status": "success", "product": serialize_ecommerce_product(product)}
         except Exception as exc:
