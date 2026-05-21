@@ -848,26 +848,10 @@ def bootstrap_shopify_connection(db: Session, connection: EcommerceConnection) -
         db.commit()
         raise
 
-    bootstrap_steps = [
-        ("orders", lambda: sync_orders(db, connection, 50)),
-        ("products", lambda: sync_products(db, connection, 100)),
-        ("inventory", lambda: sync_inventory(db, connection, 100)),
-        ("customers", lambda: sync_customers(db, connection, 100)),
-    ]
-    for step_name, step in bootstrap_steps:
-        try:
-            result[step_name] = step()
-        except Exception as exc:
-            result[step_name] = {"status": "skipped", "error": str(exc)}
-            db.add(
-                AgentAction(
-                    action_type=f"shopify_bootstrap_{step_name}_skipped",
-                    status="skipped",
-                    payload=_json_dumps({"connection_id": connection.id}),
-                    result=_json_dumps({"error": str(exc)}),
-                )
-            )
-            db.commit()
+    result["live_api_mode"] = {
+        "status": "enabled",
+        "message": "Shopify product, order, and customer data are read live and cached in Redis.",
+    }
 
     try:
         result["webhooks"] = register_shopify_webhooks(db, connection)

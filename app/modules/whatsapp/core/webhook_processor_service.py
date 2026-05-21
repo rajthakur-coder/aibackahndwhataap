@@ -7,11 +7,9 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.models.crm import AgentAction
-from app.models.ecommerce import EcommerceProduct
 from app.models.whatsapp import WebhookEvent
 from app.modules.crm.core.crm_agent_service import process_agent_message
 from app.modules.ai.core.ai_tools_service import ToolDecision, decide_tool_for_message, run_ai_tool
-from app.modules.ai.core.product_search_service import product_search_text, score_search_text, search_terms
 from app.modules.crm.core.conversation_memory_service import remember_last_products, remember_last_question
 from app.modules.whatsapp.core.messages_service import save_message
 from app.modules.whatsapp.core.live_chat_service import serialize_message
@@ -20,8 +18,6 @@ from app.modules.ai.core.openai_chat_service import generate_ai_reply
 from app.modules.ai.core.query_understanding_service import understand_message
 from app.modules.ai.core.sales_recommendations_service import (
     extract_requested_limit,
-    find_cross_sell_products,
-    find_product_recommendations,
     find_top_selling_products,
     is_top_selling_request,
     recommendation_caption,
@@ -220,8 +216,6 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         query_text,
         limit=requested_limit,
     )
-    if not recommended_products:
-        recommended_products = find_product_recommendations(db, query_text, limit=requested_limit)
     if recommended_products:
         remember_last_products(db, phone, recommended_products)
         product_list_sent = await _try_send_product_list(
@@ -276,7 +270,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         limit=requested_limit,
     )
     if not catalog_products:
-        catalog_products = _find_database_catalog_products(db, query_text, limit=requested_limit)
+        catalog_products = []
     if catalog_products:
         remember_last_products(db, phone, catalog_products)
         product_list_sent = await _try_send_product_list(
@@ -341,7 +335,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
 
     product_image = await find_cached_shopify_product_image(db, query_text)
     if not product_image:
-        product_image = _find_database_product_image(db, query_text)
+        product_image = None
     if product_image:
         remember_last_products(db, phone, [product_image])
         product_list_sent = await _try_send_product_list(
@@ -454,103 +448,6 @@ def _understanding_context(understanding, agent_context: str) -> str:
     return "\n".join(parts)
 
 
-def _find_database_catalog_products(db: Session, query: str, limit: int = 5) -> list[dict]:
-    if not _looks_like_catalog_request(query):
-        return []
-    query_terms = search_terms(query)
-    products = db.execute(
-        select(EcommerceProduct).order_by(EcommerceProduct.updated_at.desc()).limit(400)
-    ).scalars().all()
-    scored = [
-        (score_search_text(query_terms, product_search_text(product)), product)
-        for product in products
-    ]
-    ranked = [
-        product
-        for score, product in sorted(scored, key=lambda item: item[0], reverse=True)
-        if score > 0
-    ]
-    if not ranked:
-        ranked = [product for _score, product in sorted(scored, key=lambda item: item[0], reverse=True)]
-    return [_product_result(product) for product in ranked[: max(1, min(limit, 10))]]
-
-
-def _find_database_product_image(db: Session, query: str) -> dict | None:
-    if not _looks_like_image_request(query):
-        return None
-    query_terms = search_terms(query)
-    products = db.execute(
-        select(EcommerceProduct).order_by(EcommerceProduct.updated_at.desc()).limit(400)
-    ).scalars().all()
-    scored = [
-        (score_search_text(query_terms, product_search_text(product)), product)
-        for product in products
-        if _product_image_urls(product)
-    ]
-    if not scored:
-        return None
-    ranked = [
-        product
-        for score, product in sorted(scored, key=lambda item: item[0], reverse=True)
-        if score > 0
-    ]
-    product = ranked[0] if ranked else sorted(scored, key=lambda item: item[0], reverse=True)[0][1]
-    return _product_result(product)
-
-
-def _product_result(product: EcommerceProduct) -> dict:
-    image_urls = _product_image_urls(product)
-    return {
-        "title": product.title,
-        "product_url": product.product_url,
-        "price_min": product.price_min,
-        "price_max": product.price_max,
-        "image_url": image_urls[0] if image_urls else None,
-        "caption": _product_caption(product),
-        "sku": product.sku,
-        "external_id": product.external_id,
-        "shopify_product_id": product.shopify_product_id,
-        "retailer_id": _first_retailer_id(product),
-    }
-
-
-def _product_image_urls(product: EcommerceProduct) -> list[str]:
-    try:
-        image_urls = json.loads(product.image_urls or "[]")
-    except json.JSONDecodeError:
-        return []
-    return [url for url in image_urls if isinstance(url, str) and url.startswith("http")]
-
-
-def _product_caption(product: EcommerceProduct) -> str:
-    parts = [product.title]
-    if product.price_min:
-        price = product.price_min
-        if product.price_max and product.price_max != product.price_min:
-            price = f"{product.price_min} - {product.price_max}"
-        parts.append(f"Price: {price}")
-    if product.product_url:
-        parts.append(product.product_url)
-    return "\n".join(parts)
-
-
-def _first_retailer_id(product: EcommerceProduct) -> str | None:
-    skus = []
-    if product.sku:
-        skus.extend(part.strip() for part in product.sku.split(",") if part.strip())
-    try:
-        skus.extend(
-            sku
-            for sku in json.loads(product.skus or "[]")
-            if isinstance(sku, str) and sku.strip()
-        )
-    except json.JSONDecodeError:
-        pass
-    if skus:
-        return sorted(set(skus))[0]
-    return product.external_id or product.shopify_product_id
-
-
 def _looks_like_catalog_request(query: str) -> bool:
     terms = _request_terms(query)
     return bool(terms & CATALOG_REQUEST_TERMS and terms & REQUEST_ACTION_TERMS)
@@ -590,29 +487,4 @@ async def _send_cross_sell_products(
     text: str,
     base_products: list[dict],
 ) -> None:
-    cross_sell_products = find_cross_sell_products(db, text, base_products, limit=3)
-    if not cross_sell_products:
-        return
-
-    product_list_sent = await _try_send_product_list(
-        phone,
-        cross_sell_products,
-        "You may also like",
-        "Inke saath ye products bhi useful ho sakte hain.",
-    )
-    if product_list_sent:
-        save_message(db, phone, "[product_list] Cross-sell products", "outgoing")
-        return
-
-    lines = ["You may also like:"]
-    for index, product in enumerate(cross_sell_products, start=1):
-        product_line = f"{index}. {product['title']}"
-        price = product.get("price") or ""
-        if price:
-            product_line += f" - {price}"
-        if product.get("product_url"):
-            product_line += f"\n{product['product_url']}"
-        lines.append(product_line)
-    cross_sell_text = "\n\n".join(lines)
-    await run_in_threadpool(send_whatsapp_message, phone, cross_sell_text)
-    save_message(db, phone, cross_sell_text, "outgoing")
+    return

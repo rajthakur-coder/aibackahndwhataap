@@ -9,7 +9,7 @@ from app.config import settings
 from app.db.session import AsyncSessionLocal
 from app.models.ecommerce import EcommerceConnection, ShopifyWebhookEvent
 from app.models.crm import AgentAction
-from app.modules.ecommerce.core.ecommerce_core_service import sync_customers, sync_inventory, sync_orders, sync_products
+from app.modules.ecommerce.core.ecommerce_core_service import sync_abandoned_checkouts
 
 
 def sync_active_ecommerce_connections_with_session(db: Session) -> dict:
@@ -23,23 +23,11 @@ def sync_active_ecommerce_connections_with_session(db: Session) -> dict:
     failed = 0
     for connection in connections:
         try:
-            result = sync_orders(db, connection, settings.ecommerce_auto_sync_limit)
-            if settings.ecommerce_auto_sync_products_enabled:
-                product_result = sync_products(
-                    db,
-                    connection,
-                    settings.ecommerce_auto_sync_product_limit,
-                )
-                if connection.platform == "shopify":
-                    product_result["inventory"] = sync_inventory(
-                        db,
-                        connection,
-                        settings.ecommerce_auto_sync_product_limit,
-                    )
-                result["products"] = product_result
             if connection.platform == "shopify":
-                result["customers"] = sync_customers(db, connection, settings.ecommerce_auto_sync_limit)
-            synced += result.get("synced", 0)
+                result = sync_abandoned_checkouts(db, connection, settings.ecommerce_auto_sync_limit)
+            else:
+                result = {"status": "skipped", "reason": "live_api_mode"}
+            synced += result.get("queued", 0)
             results.append({"connection_id": connection.id, **result})
         except Exception as exc:
             failed += 1

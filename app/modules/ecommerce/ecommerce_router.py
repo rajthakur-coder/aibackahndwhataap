@@ -39,13 +39,9 @@ from app.modules.ecommerce.ecommerce_service import (
     send_delivered_followups,
     sync_abandoned_checkouts,
     sync_active_ecommerce_connections,
-    sync_inventory,
-    sync_orders,
-    sync_products,
     test_connection,
     update_connection,
     upsert_order as upsert_ecommerce_order,
-    upsert_product,
     validate_shopify_scopes,
     verify_shopify_hmac,
 )
@@ -173,10 +169,12 @@ async def sync_ecommerce_orders(
 ):
     def sync_op(sync_db: Session):
         connection = _connection_or_404(sync_db, connection_id)
-        try:
-            return sync_orders(sync_db, connection, data.limit)
-        except requests.RequestException as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "status": "skipped",
+            "reason": "live_api_mode",
+            "message": "Orders are read directly from Shopify API and cached in Redis.",
+            "connection_id": connection.id,
+        }
 
     return await db.run_sync(sync_op)
 
@@ -189,10 +187,12 @@ async def sync_ecommerce_products(
 ):
     def sync_op(sync_db: Session):
         connection = _connection_or_404(sync_db, connection_id)
-        try:
-            return sync_products(sync_db, connection, data.limit)
-        except requests.RequestException as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "status": "skipped",
+            "reason": "live_api_mode",
+            "message": "Products are read directly from Shopify API and cached in Redis.",
+            "connection_id": connection.id,
+        }
 
     return await db.run_sync(sync_op)
 
@@ -205,10 +205,12 @@ async def sync_ecommerce_inventory(
 ):
     def sync_op(sync_db: Session):
         connection = _connection_or_404(sync_db, connection_id)
-        try:
-            return sync_inventory(sync_db, connection, data.limit)
-        except requests.RequestException as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "status": "skipped",
+            "reason": "live_api_mode",
+            "message": "Inventory is read directly from Shopify API when product data is requested.",
+            "connection_id": connection.id,
+        }
 
     return await db.run_sync(sync_op)
 
@@ -400,9 +402,12 @@ async def shopify_products_webhook(
             return {"status": "ignored", "reason": "duplicate"}
         product_payload = body.get("product") if isinstance(body, dict) and isinstance(body.get("product"), dict) else body
         try:
-            product = upsert_product(sync_db, connection, product_payload)
             mark_shopify_webhook_event(sync_db, event, "processed")
-            return {"status": "success", "product": serialize_ecommerce_product(product)}
+            return {
+                "status": "ignored",
+                "reason": "live_api_mode",
+                "external_id": product_payload.get("id") if isinstance(product_payload, dict) else None,
+            }
         except Exception as exc:
             mark_shopify_webhook_event(sync_db, event, "failed", str(exc))
             raise HTTPException(status_code=500, detail=str(exc)) from exc

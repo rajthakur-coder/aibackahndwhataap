@@ -7,10 +7,9 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.ecommerce import EcommerceCustomer, EcommerceOrder, EcommerceProduct
+from app.models.ecommerce import EcommerceCustomer, EcommerceOrder
 from app.modules.ecommerce.core.ecommerce_core_service import order_status_text
 from app.modules.ai.core.intelligence_service import detect_query_intent
-from app.modules.ai.core.product_search_service import product_search_text, score_search_text, search_terms
 
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -159,41 +158,10 @@ def _order_status_context(db: Session, phone: str, message: str) -> dict:
 
 
 def _product_context(db: Session, _phone: str, message: str) -> dict:
-    query_terms = search_terms(message)
-    candidates = db.execute(
-        select(EcommerceProduct).order_by(EcommerceProduct.updated_at.desc()).limit(400)
-    ).scalars().all()
-    scored_products = [
-        (score_search_text(query_terms, product_search_text(product)), product)
-        for product in candidates
-    ]
-    products = [
-        product
-        for score, product in sorted(scored_products, key=lambda item: item[0], reverse=True)
-        if score > 0
-    ][:6]
-    if not products:
-        return {"context": "No matching products found in ecommerce database.", "data": []}
-    lines = []
-    for product in products:
-        price = product.price_min or ""
-        if product.price_max and product.price_max != product.price_min:
-            price = f"{product.price_min or ''} - {product.price_max}"
-        lines.append(
-            "\n".join(
-                [
-                    f"Product: {product.title}",
-                    f"Price: {price} {product.currency or ''}".strip(),
-                    f"Vendor: {product.vendor or 'unknown'}",
-                    f"Type: {product.product_type or 'unknown'}",
-                    f"SKU: {product.sku or 'unknown'}",
-                    f"Inventory: {product.inventory or 'unknown'}",
-                    f"URL: {product.product_url or 'not available'}",
-                    f"Description: {(product.description or '')[:700]}",
-                ]
-            )
-        )
-    return {"context": "\n\n".join(lines), "data": [{"id": product.id} for product in products]}
+    return {
+        "context": "Product details are fetched live from Shopify during the WhatsApp product flow.",
+        "data": [],
+    }
 
 
 def _customer_context(db: Session, phone: str, _message: str) -> dict:
@@ -225,18 +193,7 @@ def _service_context(db: Session, _phone: str, message: str) -> dict:
 
 
 def _database_hint_context(db: Session, _phone: str, message: str) -> dict:
-    sections = []
-    ecommerce_products = db.execute(
-        select(EcommerceProduct).order_by(EcommerceProduct.updated_at.desc()).limit(3)
-    ).scalars().all()
-    for row in ecommerce_products:
-        sections.append(
-            f"Ecommerce product: {row.title}\n"
-            f"Price: {row.price_min or 'not listed'}\n"
-            f"URL: {row.product_url or 'not available'}\n"
-            f"{(row.description or '')[:700]}"
-        )
-    return {"context": "\n\n".join(sections), "data": []}
+    return {"context": "", "data": []}
 
 
 def _general_context(_db: Session, _phone: str, _message: str) -> dict:
