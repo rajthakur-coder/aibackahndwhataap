@@ -10,10 +10,12 @@ from app.db.session import AsyncSessionLocal, get_db
 from app.models.crm import AgentAction
 from app.models.ecommerce import EcommerceConnection
 from app.modules.automation.automation_service import (
-    create_abandoned_cart_event,
     enqueue_order_automation_events,
     process_automation_event,
     serialize_event,
+)
+from app.modules.automation.core.automation_sync_service import (
+    create_abandoned_cart_event as create_sync_abandoned_cart_event,
 )
 from app.modules.ecommerce.core.ecommerce_serializers import (
     serialize_ecommerce_connection,
@@ -572,7 +574,7 @@ async def receive_abandoned_cart_webhook(
         if not payload["phone"]:
             raise HTTPException(status_code=400, detail="Abandoned cart phone is required")
 
-        event = create_abandoned_cart_event(sync_db, payload=payload, source="ecommerce_abandoned_cart_webhook")
+        event = create_sync_abandoned_cart_event(sync_db, payload=payload, source="ecommerce_abandoned_cart_webhook")
         result = process_automation_event(sync_db, event)
         return {"status": "queued", "event": serialize_event(event), "automation": result}
 
@@ -585,7 +587,7 @@ async def add_abandoned_cart(
     db: AsyncSession = Depends(get_db),
 ):
     def sync_op(sync_db: Session):
-        event = create_abandoned_cart_event(
+        event = create_sync_abandoned_cart_event(
             sync_db,
             payload=data.model_dump(),
             source="ecommerce_api",
