@@ -238,6 +238,231 @@ def send_whatsapp_carousel(
     return response.json()
 
 
+def send_whatsapp_cta_url(
+    phone: str,
+    body_text: str,
+    button_text: str,
+    button_url: str,
+    header_text: str | None = None,
+    image_url: str | None = None,
+    footer_text: str | None = None,
+) -> dict:
+    access_token = settings.access_token
+    phone_number_id = settings.phone_number_id
+
+    if not access_token or not phone_number_id:
+        raise RuntimeError("WhatsApp credentials are not configured")
+    if not phone or not body_text or not button_text or not button_url:
+        raise ValueError("Phone, body text, button text, and button URL are required")
+
+    interactive = {
+        "type": "cta_url",
+        "body": {"text": body_text[:1024]},
+        "action": {
+            "name": "cta_url",
+            "parameters": {
+                "display_text": button_text[:20],
+                "url": button_url,
+            },
+        },
+    }
+    if image_url:
+        interactive["header"] = {
+            "type": "image",
+            "image": {"link": image_url},
+        }
+    elif header_text:
+        interactive["header"] = {
+            "type": "text",
+            "text": header_text[:60],
+        }
+    if footer_text:
+        interactive["footer"] = {"text": footer_text[:60]}
+
+    url = (
+        f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/"
+        f"{phone_number_id}/messages"
+    )
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": phone,
+        "type": "interactive",
+        "interactive": interactive,
+    }
+
+    response = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def send_whatsapp_list(
+    phone: str,
+    body_text: str,
+    button_text: str,
+    rows: list[dict],
+    header_text: str | None = None,
+    section_title: str = "Options",
+    footer_text: str | None = None,
+) -> dict:
+    access_token = settings.access_token
+    phone_number_id = settings.phone_number_id
+
+    if not access_token or not phone_number_id:
+        raise RuntimeError("WhatsApp credentials are not configured")
+    if not phone or not body_text or not button_text or not rows:
+        raise ValueError("Phone, body text, button text, and rows are required")
+
+    action_rows = []
+    for row in rows[:10]:
+        row_id = str(row.get("id") or "").strip()
+        title = str(row.get("title") or "").strip()
+        if not row_id or not title:
+            continue
+        item = {
+            "id": row_id[:200],
+            "title": title[:24],
+        }
+        description = str(row.get("description") or "").strip()
+        if description:
+            item["description"] = description[:72]
+        action_rows.append(item)
+
+    if not action_rows:
+        raise ValueError("At least one valid list row is required")
+
+    interactive = {
+        "type": "list",
+        "body": {"text": body_text[:4096]},
+        "action": {
+            "button": button_text[:20],
+            "sections": [
+                {
+                    "title": section_title[:24],
+                    "rows": action_rows,
+                }
+            ],
+        },
+    }
+    if header_text:
+        interactive["header"] = {
+            "type": "text",
+            "text": header_text[:60],
+        }
+    if footer_text:
+        interactive["footer"] = {"text": footer_text[:60]}
+
+    url = (
+        f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/"
+        f"{phone_number_id}/messages"
+    )
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": phone,
+        "type": "interactive",
+        "interactive": interactive,
+    }
+
+    response = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def send_whatsapp_reply_buttons(
+    phone: str,
+    body_text: str,
+    buttons: list[dict],
+    header_text: str | None = None,
+    footer_text: str | None = None,
+    image_url: str | None = None,
+) -> dict:
+    access_token = settings.access_token
+    phone_number_id = settings.phone_number_id
+
+    if not access_token or not phone_number_id:
+        raise RuntimeError("WhatsApp credentials are not configured")
+    if not phone or not body_text or not buttons:
+        raise ValueError("Phone, body text, and buttons are required")
+
+    action_buttons = []
+    for button in buttons[:3]:
+        button_id = str(button.get("id") or "").strip()
+        title = str(button.get("title") or "").strip()
+        if not button_id or not title:
+            continue
+        action_buttons.append(
+            {
+                "type": "reply",
+                "reply": {
+                    "id": button_id[:256],
+                    "title": title[:20],
+                },
+            }
+        )
+
+    if not action_buttons:
+        raise ValueError("At least one valid reply button is required")
+
+    interactive = {
+        "type": "button",
+        "body": {"text": body_text[:1024]},
+        "action": {"buttons": action_buttons},
+    }
+    if image_url:
+        interactive["header"] = {
+            "type": "image",
+            "image": {"link": image_url},
+        }
+    elif header_text:
+        interactive["header"] = {
+            "type": "text",
+            "text": header_text[:60],
+        }
+    if footer_text:
+        interactive["footer"] = {"text": footer_text[:60]}
+
+    url = (
+        f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/"
+        f"{phone_number_id}/messages"
+    )
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": phone,
+        "type": "interactive",
+        "interactive": interactive,
+    }
+
+    response = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def send_whatsapp_template(
     phone: str,
     template_name: str,

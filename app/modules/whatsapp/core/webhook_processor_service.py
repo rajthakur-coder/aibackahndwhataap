@@ -24,6 +24,8 @@ from app.modules.ai.core.sales_recommendations_service import (
 )
 from app.modules.ecommerce.core.shopify_cache_service import (
     find_cached_shopify_catalog_products,
+    find_cached_shopify_catalog_categories,
+    find_cached_shopify_category_products,
     find_cached_shopify_order_status,
     find_cached_shopify_product_image,
     find_cached_shopify_product_recommendations,
@@ -31,9 +33,12 @@ from app.modules.ecommerce.core.shopify_cache_service import (
 )
 from app.modules.whatsapp.core.whatsapp_client_service import (
     send_whatsapp_carousel,
+    send_whatsapp_cta_url,
     send_whatsapp_image,
+    send_whatsapp_list,
     send_whatsapp_message,
     send_whatsapp_product_list,
+    send_whatsapp_reply_buttons,
 )
 
 
@@ -53,6 +58,20 @@ IMAGE_REQUEST_TERMS = {
 }
 CATALOG_REQUEST_TERMS = {"catalog", "catalogue", "products", "product", "collection", "items", "list", "menu"}
 REQUEST_ACTION_TERMS = {"bhejo", "chahiye", "chaiye", "dekhna", "dikha", "dikhana", "dikhao", "send", "show"}
+CATALOG_CATEGORY_ROWS = [
+    {"id": "catalog:all", "title": "All products", "description": "Browse the full catalog"},
+    {"id": "catalog:best_sellers", "title": "Best sellers", "description": "Popular products"},
+]
+CATALOG_CATEGORY_LABELS = {
+    "all": "All products",
+    "best_sellers": "Best sellers",
+}
+MAIN_MENU_BUTTONS = [
+    {"id": "menu:catalog", "title": "View catalog"},
+    {"id": "menu:order_status", "title": "Track order"},
+    {"id": "menu:human", "title": "Talk to human"},
+]
+GREETING_TERMS = {"hi", "hello", "hey", "menu", "help", "start", "namaste", "hii"}
 
 
 def parse_whatsapp_messages(payload: dict) -> list[dict]:
@@ -65,6 +84,29 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
                 message_id = message.get("id")
                 text = message.get("text", {}).get("body")
                 phone = message.get("from")
+                interactive = message.get("interactive") or {}
+                list_reply = interactive.get("list_reply") if interactive.get("type") == "list_reply" else None
+                button_reply = interactive.get("button_reply") if interactive.get("type") == "button_reply" else None
+                if list_reply:
+                    reply_id = str(list_reply.get("id") or "")
+                    title = str(list_reply.get("title") or "")
+                    if reply_id.startswith("catalog:category:"):
+                        text = f"catalog dynamic category {reply_id.removeprefix('catalog:category:')} {title}".strip()
+                    elif reply_id.startswith("catalog:"):
+                        text = f"catalog category {reply_id.removeprefix('catalog:')} {title}".strip()
+                    else:
+                        text = title or reply_id
+                elif button_reply:
+                    reply_id = str(button_reply.get("id") or "")
+                    title = str(button_reply.get("title") or "")
+                    if reply_id == "menu:catalog":
+                        text = "catalog dikhao"
+                    elif reply_id == "menu:order_status":
+                        text = "track order"
+                    elif reply_id == "menu:human":
+                        text = "talk to human"
+                    else:
+                        text = title or reply_id
 
                 if phone and text:
                     parsed_messages.append(
@@ -163,6 +205,52 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         if shopify_order_reply:
             agent_state["reply_override"] = shopify_order_reply
     requested_limit = _requested_limit_from_understanding(understanding, query_text)
+    if _is_main_menu_request(query_text):
+        menu_sent = await _try_send_main_menu(phone)
+        if menu_sent:
+            save_message(db, phone, "[buttons] Main menu", "outgoing")
+            _mark_processed(db, event)
+            return
+
+    selected_catalog_category = _selected_catalog_category(query_text)
+    if selected_catalog_category:
+        category_products = await _products_for_catalog_category(db, selected_catalog_category, requested_limit)
+        if category_products:
+            remember_last_products(db, phone, category_products)
+            label_key = selected_catalog_category.removeprefix("dynamic:")
+            label = CATALOG_CATEGORY_LABELS.get(selected_catalog_category, label_key.replace("_", " ").title())
+            carousel_sent = await _try_send_product_carousel(
+                phone,
+                category_products,
+                f"{label} products dekh sakte hain.",
+            )
+            if carousel_sent:
+                save_message(db, phone, f"[carousel] {label}", "outgoing")
+                _mark_processed(db, event)
+                return
+            product_list_sent = await _try_send_product_list(
+                phone,
+                category_products,
+                label,
+                f"{label} products dekh sakte hain.",
+            )
+            if product_list_sent:
+                save_message(db, phone, f"[product_list] {label}", "outgoing")
+                _mark_processed(db, event)
+                return
+        fallback_text = "Is category me abhi products nahi mile. Aap All products try kar sakte hain."
+        await run_in_threadpool(send_whatsapp_message, phone, fallback_text)
+        save_message(db, phone, fallback_text, "outgoing")
+        _mark_processed(db, event)
+        return
+
+    if _looks_like_catalog_request(query_text):
+        category_list_sent = await _try_send_catalog_category_list(db, phone)
+        if category_list_sent:
+            save_message(db, phone, "[list] Catalog categories", "outgoing")
+            _mark_processed(db, event)
+            return
+
     if is_top_selling_request(query_text) or understanding.intent == "top_selling_products":
         top_selling_products = await find_cached_shopify_top_selling_products(db, limit=requested_limit)
         if top_selling_products:
@@ -372,6 +460,16 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         product_image = None
     if product_image:
         remember_last_products(db, phone, [product_image])
+        cta_sent = await _try_send_product_cta(
+            phone,
+            product_image,
+            "Buy now",
+        )
+        if cta_sent:
+            save_message(db, phone, f"[cta_url] {product_image['title']}", "outgoing")
+            await _send_cross_sell_products(db, phone, query_text, [product_image])
+            _mark_processed(db, event)
+            return
         product_list_sent = await _try_send_product_list(
             phone,
             [product_image],
@@ -495,6 +593,72 @@ def _request_terms(query: str) -> set[str]:
     return {token.lower() for token in re.findall(r"[a-zA-Z0-9]+", query or "")}
 
 
+def _is_main_menu_request(query: str) -> bool:
+    normalized = " ".join((query or "").lower().split())
+    return normalized in GREETING_TERMS
+
+
+async def _try_send_main_menu(phone: str) -> bool:
+    try:
+        await run_in_threadpool(
+            send_whatsapp_reply_buttons,
+            phone,
+            "Kaise help kar sakte hain?",
+            MAIN_MENU_BUTTONS,
+            "Main menu",
+        )
+    except Exception:
+        return False
+    return True
+
+
+def _selected_catalog_category(query: str) -> str | None:
+    normalized = " ".join((query or "").lower().split())
+    dynamic_match = re.search(r"\bcatalog dynamic category ([a-z0-9_]+)\b", normalized)
+    if dynamic_match:
+        return f"dynamic:{dynamic_match.group(1)}"
+    match = re.search(r"\bcatalog category ([a-z_]+)\b", normalized)
+    if not match:
+        return None
+    category = match.group(1)
+    return category if category in CATALOG_CATEGORY_LABELS else None
+
+
+async def _products_for_catalog_category(db: Session, category: str, limit: int) -> list[dict]:
+    if category == "best_sellers":
+        return await find_cached_shopify_top_selling_products(db, limit=limit)
+    if category == "all":
+        return await find_cached_shopify_category_products(db, "all", limit=limit)
+    if category.startswith("dynamic:"):
+        return await find_cached_shopify_category_products(db, category.removeprefix("dynamic:"), limit=limit)
+    return await find_cached_shopify_category_products(db, category, limit=limit)
+
+
+async def _try_send_catalog_category_list(db: Session, phone: str) -> bool:
+    dynamic_rows = await find_cached_shopify_catalog_categories(db, limit=8)
+    rows = list(CATALOG_CATEGORY_ROWS)
+    seen_ids = {row["id"] for row in rows}
+    for row in dynamic_rows:
+        if row.get("id") not in seen_ids:
+            rows.append(row)
+            seen_ids.add(row["id"])
+        if len(rows) >= 10:
+            break
+    try:
+        await run_in_threadpool(
+            send_whatsapp_list,
+            phone,
+            "Kaunsi category dekhni hai?",
+            "Categories",
+            rows,
+            "Catalog",
+            "Choose category",
+        )
+    except Exception:
+        return False
+    return True
+
+
 async def _try_send_product_list(
     phone: str,
     products: list[dict],
@@ -527,6 +691,39 @@ async def _try_send_product_carousel(
             products,
             body_text,
             "Buy now",
+        )
+    except Exception:
+        return False
+    return True
+
+
+async def _try_send_product_cta(
+    phone: str,
+    product: dict,
+    button_text: str,
+) -> bool:
+    product_url = product.get("product_url")
+    if not product_url:
+        return False
+
+    title = str(product.get("title") or "Product").strip()
+    price = str(product.get("price") or product.get("price_min") or "").strip()
+    body_parts = [title]
+    if price:
+        body_parts.append(f"Price: {price}")
+    description = str(product.get("description") or "").strip()
+    if description and description != title:
+        body_parts.append(description[:180])
+
+    try:
+        await run_in_threadpool(
+            send_whatsapp_cta_url,
+            phone,
+            "\n".join(body_parts),
+            button_text,
+            product_url,
+            title,
+            product.get("image_url"),
         )
     except Exception:
         return False

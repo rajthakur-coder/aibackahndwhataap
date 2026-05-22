@@ -1,5 +1,6 @@
 import json
 import re
+from collections import Counter
 
 from redis.exceptions import RedisError
 from sqlalchemy import select
@@ -127,6 +128,85 @@ async def find_cached_shopify_catalog_products(
         return []
     products = await _rank_cached_shopify_products(db, query, limit, allow_fallback=True)
     return products
+
+
+async def find_cached_shopify_category_products(
+    db: Session,
+    category: str,
+    limit: int = 5,
+) -> list[dict]:
+    limit = max(1, min(limit, 10))
+    category_key = " ".join((category or "").lower().split())[:80]
+    if not category_key:
+        return []
+
+    cache_key = f"shopify:category:v1:{category_key}:limit:{limit}"
+    cached = await _redis_get_json(cache_key)
+    if isinstance(cached, list):
+        return cached
+
+    products = await _cached_all_shopify_products(db)
+    if not products:
+        return []
+
+    if category_key in {"all", "all products", "new", "new arrivals"}:
+        result = products[:limit]
+    else:
+        query_terms = search_terms(category_key)
+        scored = []
+        for product in products:
+            haystack = " ".join(
+                str(product.get(key) or "")
+                for key in ("title", "description", "category", "product_type", "tags", "brand", "sku")
+            )
+            score = score_search_text(query_terms, haystack)
+            if score > 0:
+                scored.append((score, product))
+        result = [
+            product
+            for _score, product in sorted(scored, key=lambda item: item[0], reverse=True)
+        ][:limit]
+
+    if result:
+        await _redis_set_json(cache_key, result, settings.shopify_query_cache_ttl_seconds)
+    return result
+
+
+async def find_cached_shopify_catalog_categories(
+    db: Session,
+    limit: int = 8,
+) -> list[dict]:
+    limit = max(1, min(limit, 8))
+    cache_key = f"shopify:categories:v1:limit:{limit}"
+    cached = await _redis_get_json(cache_key)
+    if isinstance(cached, list):
+        return cached
+
+    products = await _cached_all_shopify_products(db)
+    if not products:
+        return []
+
+    counts: Counter[str] = Counter()
+    labels: dict[str, str] = {}
+    for product in products:
+        for label in _category_labels(product):
+            slug = _category_slug(label)
+            if not slug:
+                continue
+            counts[slug] += 1
+            labels.setdefault(slug, label.strip()[:24])
+
+    categories = [
+        {
+            "id": f"catalog:category:{slug}",
+            "title": labels[slug],
+            "description": f"{count} products",
+        }
+        for slug, count in counts.most_common(limit)
+        if count > 0
+    ]
+    await _redis_set_json(cache_key, categories, settings.shopify_query_cache_ttl_seconds)
+    return categories
 
 
 async def find_cached_shopify_product_image(
@@ -293,6 +373,30 @@ def is_image_request(query: str) -> bool:
 
 def _tokens(text: str) -> list[str]:
     return [token.lower() for token in TOKEN_RE.findall(text or "") if len(token) > 1]
+
+
+def _category_labels(product: dict) -> list[str]:
+    labels = []
+    for key in ("category", "product_type", "brand"):
+        value = str(product.get(key) or "").strip()
+        if value:
+            labels.append(value)
+
+    tags = product.get("tags")
+    if isinstance(tags, str):
+        labels.extend(tag.strip() for tag in re.split(r"[,|/]", tags) if tag.strip())
+    elif isinstance(tags, list):
+        labels.extend(str(tag).strip() for tag in tags if str(tag).strip())
+
+    return [
+        label
+        for label in labels
+        if 2 <= len(label) <= 24 and not label.lower().startswith(("all ", "best "))
+    ]
+
+
+def _category_slug(label: str) -> str:
+    return "_".join(TOKEN_RE.findall((label or "").lower()))[:80]
 
 
 def _matching_order(orders: list[dict], phone: str, order_id: str | None) -> dict | None:
