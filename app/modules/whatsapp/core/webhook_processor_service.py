@@ -26,6 +26,7 @@ from app.modules.ecommerce.core.shopify_cache_service import (
     find_cached_shopify_catalog_products,
     find_cached_shopify_catalog_categories,
     find_cached_shopify_category_products,
+    find_cached_shopify_cross_sell_products,
     find_cached_shopify_order_status,
     find_cached_shopify_product_image,
     find_cached_shopify_product_recommendations,
@@ -736,4 +737,13 @@ async def _send_cross_sell_products(
     text: str,
     base_products: list[dict],
 ) -> None:
-    return
+    products = await find_cached_shopify_cross_sell_products(db, text, base_products, limit=3)
+    if not products:
+        return
+    sent = await _try_send_product_carousel(
+        phone,
+        products,
+        "Aapko ye bhi pasand aa sakta hai.",
+    )
+    if sent:
+        save_message(db, phone, "[carousel] Cross-sell products", "outgoing")

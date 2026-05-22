@@ -30,6 +30,7 @@ from app.modules.ecommerce.ecommerce_schema import (
 from app.modules.ecommerce.ecommerce_service import (
     create_connection,
     fetch_fulfillments,
+    fetch_order_by_id,
     fetch_locations,
     find_shopify_connection_by_domain,
     mark_shopify_webhook_event,
@@ -415,12 +416,54 @@ async def shopify_fulfillments_webhook(
         connection, body, event = _shopify_webhook_context_sync(sync_db, raw_body, headers)
         if body.get("_duplicate"):
             return {"status": "ignored", "reason": "duplicate"}
+        order_id = str(body.get("order_id") or "")
+        if not order_id:
+            mark_shopify_webhook_event(sync_db, event, "processed")
+            return {"status": "accepted", "reason": "missing_order_id"}
+
+        automation_results = []
+        try:
+            order_payload = fetch_order_by_id(connection, order_id)
+            if order_payload:
+                order = upsert_ecommerce_order(sync_db, connection, order_payload)
+                status_values = {
+                    str(order.fulfillment_status or "").lower(),
+                    str(order.shipment_status or "").lower(),
+                    str(order.delivery_status or "").lower(),
+                }
+                fulfillment_status = str(body.get("status") or body.get("shipment_status") or "").lower()
+                if fulfillment_status:
+                    status_values.add(fulfillment_status)
+
+                triggers = []
+                if status_values & {"delivered"}:
+                    triggers = ["order_delivered", "feedback_request"]
+                elif status_values & {"fulfilled", "shipped", "success", "closed"} or order.tracking_number or order.tracking_url:
+                    triggers = ["order_shipped"]
+
+                if triggers:
+                    events = enqueue_order_automation_events(sync_db, order, source="shopify_fulfillment_webhook", triggers=triggers)
+                    automation_results = [process_automation_event(sync_db, event_row) for event_row in events]
+        except Exception as exc:
+            sync_db.add(
+                AgentAction(
+                    action_type="shopify_fulfillment_automation_failed",
+                    status="failed",
+                    payload=json.dumps({"shop_domain": connection.store_url, "connection_id": connection.id, "order_id": order_id}),
+                    result=json.dumps({"error": str(exc)}),
+                )
+            )
+            sync_db.commit()
+            mark_shopify_webhook_event(sync_db, event, "failed", str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
         mark_shopify_webhook_event(sync_db, event, "processed")
         return {
-            "status": "accepted",
+            "status": "success",
             "reason": "live_api_mode",
-            "message": "Fulfillment webhooks are acknowledged without storing Shopify order data in Neon.",
+            "message": "Fulfillment webhook processed without storing Shopify order data in Neon.",
             "connection_id": connection.id,
+            "automations": automation_results,
         }
 
     return await db.run_sync(sync_op)

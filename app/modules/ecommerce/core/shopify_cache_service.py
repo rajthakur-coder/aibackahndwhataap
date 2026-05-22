@@ -94,6 +94,74 @@ async def find_cached_shopify_product_recommendations(
     return products
 
 
+async def find_cached_shopify_cross_sell_products(
+    db: Session,
+    query: str,
+    base_products: list[dict],
+    limit: int = 3,
+) -> list[dict]:
+    limit = max(1, min(limit, 5))
+    if not base_products:
+        return []
+
+    signature = ",".join(
+        sorted(
+            str(product.get("external_id") or product.get("shopify_product_id") or product.get("sku") or product.get("title") or "")
+            for product in base_products
+        )
+    )[:160]
+    cache_key = f"shopify:cross-sell:v1:limit:{limit}:{signature}"
+    cached = await _redis_get_json(cache_key)
+    if isinstance(cached, list):
+        return cached
+
+    products = await _cached_all_shopify_products(db)
+    if not products:
+        return []
+
+    exclude_titles = {str(product.get("title") or "").strip().lower() for product in base_products}
+    exclude_ids = {
+        str(product.get(key) or "").strip().lower()
+        for product in base_products
+        for key in ("external_id", "shopify_product_id", "sku", "retailer_id")
+        if product.get(key)
+    }
+    terms = _cross_sell_terms(query, base_products)
+    if not terms:
+        return []
+
+    query_terms = search_terms(" ".join(sorted(terms)))
+    scored = []
+    for product in products:
+        title_key = str(product.get("title") or "").strip().lower()
+        if title_key in exclude_titles:
+            continue
+        product_ids = {
+            str(product.get(key) or "").strip().lower()
+            for key in ("external_id", "shopify_product_id", "sku", "retailer_id")
+            if product.get(key)
+        }
+        if product_ids & exclude_ids:
+            continue
+
+        searchable = " ".join(
+            str(product.get(key) or "")
+            for key in ("title", "description", "category", "product_type", "tags", "brand", "sku")
+        )
+        score = score_search_text(query_terms, searchable)
+        if product.get("image_url"):
+            score += 0.15
+        if product.get("product_url"):
+            score += 0.1
+        if score > 0:
+            scored.append((score, product))
+
+    result = [product for _score, product in sorted(scored, key=lambda item: item[0], reverse=True)][:limit]
+    if result:
+        await _redis_set_json(cache_key, result, settings.shopify_query_cache_ttl_seconds)
+    return result
+
+
 async def find_cached_shopify_top_selling_products(
     db: Session,
     limit: int = 3,
@@ -397,6 +465,27 @@ def _category_labels(product: dict) -> list[str]:
 
 def _category_slug(label: str) -> str:
     return "_".join(TOKEN_RE.findall((label or "").lower()))[:80]
+
+
+def _cross_sell_terms(query: str, base_products: list[dict]) -> set[str]:
+    terms = set(search_terms(query))
+    for product in base_products:
+        for key in ("category", "product_type", "brand", "tags", "title"):
+            terms.update(search_terms(str(product.get(key) or "")))
+
+    expansions = {
+        "shirt": {"jeans", "pants", "belt", "jacket"},
+        "tshirt": {"jeans", "shorts", "jacket"},
+        "shoe": {"socks", "laces", "cleaner"},
+        "shoes": {"socks", "laces", "cleaner"},
+        "phone": {"case", "cover", "charger"},
+        "watch": {"strap", "band", "accessory"},
+        "bag": {"wallet", "pouch", "accessory"},
+        "dress": {"heels", "bag", "accessory"},
+    }
+    for term in list(terms):
+        terms.update(expansions.get(term, set()))
+    return {term for term in terms if len(term) > 2}
 
 
 def _matching_order(orders: list[dict], phone: str, order_id: str | None) -> dict | None:

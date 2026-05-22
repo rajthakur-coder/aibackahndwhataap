@@ -408,6 +408,35 @@ def fetch_order_by_number(connection: EcommerceConnection, order_number: str) ->
     return None
 
 
+def fetch_order_by_id(connection: EcommerceConnection, order_id: str) -> dict | None:
+    clean_order_id = str(order_id or "").strip()
+    if not clean_order_id:
+        return None
+
+    if connection.platform == "shopify":
+        fields = (
+            "id,name,email,phone,tags,note,subtotal_price,total_price,total_discounts,total_tax,"
+            "currency,financial_status,fulfillment_status,line_items,shipping_address,billing_address,"
+            "customer,fulfillments,payment_gateway_names,created_at,updated_at"
+        )
+        response = _shopify_request(
+            "GET",
+            connection,
+            f"/orders/{clean_order_id}.json",
+            params={"fields": fields},
+        )
+        return response.json().get("order")
+
+    response = requests.get(
+        f"{_woocommerce_base_url(connection)}/orders/{clean_order_id}",
+        auth=(connection.consumer_key or "", connection.consumer_secret or ""),
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, dict) else None
+
+
 def fetch_all_products(connection: EcommerceConnection, limit: int = 5000) -> list[dict]:
     limit = max(1, min(limit, 5000))
     if connection.platform == "shopify":
