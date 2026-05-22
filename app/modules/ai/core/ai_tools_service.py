@@ -11,7 +11,7 @@ from app.modules.ai.core.intelligence_service import detect_query_intent
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = 20
-ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*id)?[\s:#-]*#?([A-Za-z0-9-]{2,})\b", re.I)
+ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*(?:id|number|no))?\s*(?:#|:|-)\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b|\b(?:order|ord|booking|invoice)\s+(?:id|number|no)\s+([A-Za-z0-9][A-Za-z0-9-]{1,})\b|#([A-Za-z0-9][A-Za-z0-9-]{1,})\b", re.I)
 TOOL_NAMES = {
     "get_order_status",
     "search_products",
@@ -112,7 +112,7 @@ def _llm_tool_decision(message: str) -> ToolDecision | None:
 
 def _order_id(message: str) -> str | None:
     match = ORDER_RE.search(message or "")
-    return match.group(1).upper() if match else None
+    return next((group.upper() for group in match.groups() if group), None) if match else None
 
 
 def _order_status_context(db: Session, phone: str, message: str) -> dict:

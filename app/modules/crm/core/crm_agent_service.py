@@ -19,7 +19,7 @@ from app.models.whatsapp import Message
 
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
-ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*id)?[\s:#-]*#?([A-Za-z0-9-]{2,})\b", re.I)
+ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*(?:id|number|no))?\s*(?:#|:|-)\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b|\b(?:order|ord|booking|invoice)\s+(?:id|number|no)\s+([A-Za-z0-9][A-Za-z0-9-]{1,})\b|#([A-Za-z0-9][A-Za-z0-9-]{1,})\b", re.I)
 NAME_RE = re.compile(r"\b(?:my name is|i am|i'm|name is|mera naam)\s+([A-Za-z][A-Za-z ]{1,40})", re.I)
 
 INTENT_KEYWORDS = {
@@ -130,7 +130,7 @@ def _extract_email(message: str) -> str | None:
 
 def _extract_order_id(message: str) -> str | None:
     match = ORDER_RE.search(message)
-    return match.group(1).upper() if match else None
+    return next((group.upper() for group in match.groups() if group), None) if match else None
 
 
 def _extract_time_hint(message: str) -> str | None:

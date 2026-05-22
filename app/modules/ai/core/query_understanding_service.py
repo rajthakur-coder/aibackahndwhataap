@@ -11,7 +11,7 @@ from app.modules.ai.core.sales_recommendations_service import extract_requested_
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = 15
-ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*id)?[\s:#-]*#?([A-Za-z0-9-]{2,})\b", re.I)
+ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*(?:id|number|no))?\s*(?:#|:|-)\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b|\b(?:order|ord|booking|invoice)\s+(?:id|number|no)\s+([A-Za-z0-9][A-Za-z0-9-]{1,})\b|#([A-Za-z0-9][A-Za-z0-9-]{1,})\b", re.I)
 
 TOOL_BY_INTENT = {
     "order_status": "get_order_status",
@@ -157,7 +157,7 @@ def _merge_rule_entities(message: str, entities: dict) -> dict:
     merged = dict(entities)
     order_match = ORDER_RE.search(message or "")
     if order_match and not merged.get("order_id"):
-        merged["order_id"] = order_match.group(1).upper()
+        merged["order_id"] = next((group.upper() for group in order_match.groups() if group), None)
     requested_limit = extract_requested_limit(message, default=0)
     if requested_limit and not merged.get("limit"):
         merged["limit"] = requested_limit

@@ -25,7 +25,7 @@ from app.shared.redis import get_redis
 PRODUCT_CATALOG_CACHE_LIMIT = 5000
 ORDER_CACHE_LIMIT = 100
 TOP_SELLING_ORDER_LIMIT = 500
-ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*id)?[\s:#-]*#?([A-Za-z0-9-]{2,})\b", re.I)
+ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*(?:id|number|no))?\s*(?:#|:|-)\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b|\b(?:order|ord|booking|invoice)\s+(?:id|number|no)\s+([A-Za-z0-9][A-Za-z0-9-]{1,})\b|#([A-Za-z0-9][A-Za-z0-9-]{1,})\b", re.I)
 TOKEN_RE = re.compile(r"[a-zA-Z0-9]+")
 IMAGE_REQUEST_TERMS = {
     "image",
@@ -359,7 +359,7 @@ def _active_shopify_connection(db: Session) -> EcommerceConnection | None:
 
 def _extract_order_id(query: str) -> str | None:
     match = ORDER_RE.search(query or "")
-    return match.group(1).upper() if match else None
+    return next((group.upper() for group in match.groups() if group), None) if match else None
 
 
 def is_catalog_request(query: str) -> bool:
