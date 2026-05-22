@@ -83,7 +83,7 @@ DEFAULT_RULES = [
         "message_body": (
             "Hi {{customer_name}}, you left items in your cart. Tap the button below to complete your order."
         ),
-        "delay_seconds": 900,
+        "delay_seconds": 120,
     },
     {
         "name": "Feedback Request",
