@@ -3,12 +3,9 @@ import re
 from dataclasses import dataclass
 
 import requests
-from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.ecommerce import EcommerceCustomer, EcommerceOrder
-from app.modules.ecommerce.core.ecommerce_core_service import order_status_text
 from app.modules.ai.core.intelligence_service import detect_query_intent
 
 
@@ -119,42 +116,10 @@ def _order_id(message: str) -> str | None:
 
 
 def _order_status_context(db: Session, phone: str, message: str) -> dict:
-    order_id = _order_id(message)
-    statement = select(EcommerceOrder)
-    if order_id:
-        normalized = order_id.lstrip("#")
-        statement = statement.where(
-            or_(
-                EcommerceOrder.order_number == order_id,
-                EcommerceOrder.order_number == f"#{normalized}",
-                EcommerceOrder.external_id == normalized,
-            )
-        )
-    else:
-        statement = statement.where(EcommerceOrder.phone == phone)
-    orders = db.execute(
-        statement.order_by(EcommerceOrder.updated_at.desc()).limit(3)
-    ).scalars().all()
-    if not orders:
-        return {"context": "No matching ecommerce order was found in database.", "data": []}
-    lines = []
-    for order in orders:
-        lines.append(
-            "\n".join(
-                [
-                    f"Order: {order.order_number}",
-                    f"Customer: {order.customer_name or 'unknown'}",
-                    f"Phone: {order.phone or 'unknown'}",
-                    f"Status: {order.status or 'unknown'}",
-                    f"Fulfillment: {order.fulfillment_status or 'unknown'}",
-                    f"Payment: {order.financial_status or 'unknown'}",
-                    f"Total: {order.total or ''} {order.currency or ''}".strip(),
-                    f"Tracking: {order.tracking_url or order.tracking_number or 'not available'}",
-                    f"Summary: {order_status_text(order)}",
-                ]
-            )
-        )
-    return {"context": "\n\n".join(lines), "data": [{"id": order.id} for order in orders]}
+    return {
+        "context": "Order details are fetched live from the ecommerce API during the WhatsApp order-status flow.",
+        "data": [],
+    }
 
 
 def _product_context(db: Session, _phone: str, message: str) -> dict:
@@ -165,23 +130,10 @@ def _product_context(db: Session, _phone: str, message: str) -> dict:
 
 
 def _customer_context(db: Session, phone: str, _message: str) -> dict:
-    customer = db.execute(
-        select(EcommerceCustomer)
-        .where(EcommerceCustomer.phone == phone)
-        .order_by(EcommerceCustomer.updated_at.desc())
-    ).scalars().first()
-    if not customer:
-        return {"context": "No ecommerce customer profile found for this WhatsApp number.", "data": []}
-    context = (
-        f"Customer: {customer.name or 'unknown'}\n"
-        f"Phone: {customer.phone or 'unknown'}\n"
-        f"Email: {customer.email or 'unknown'}\n"
-        f"Total orders: {customer.total_orders or 0}\n"
-        f"Total spend: {customer.total_spend or 'unknown'}\n"
-        f"Tags: {customer.tags or 'none'}\n"
-        f"WhatsApp opt-in: {customer.whatsapp_opt_in or 'unknown'}"
-    )
-    return {"context": context, "data": [{"id": customer.id}]}
+    return {
+        "context": "Customer details are fetched live from the ecommerce API only when a workflow needs them; full customer profiles are not stored in Neon.",
+        "data": [],
+    }
 
 
 def _policy_faq_context(db: Session, _phone: str, message: str) -> dict:

@@ -2,13 +2,13 @@ import json
 
 import requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import AsyncSessionLocal, get_db
 from app.models.crm import AgentAction
-from app.models.ecommerce import EcommerceConnection, EcommerceCustomer, EcommerceOrder, EcommerceProduct
+from app.models.ecommerce import EcommerceConnection
 from app.modules.automation.automation_service import (
     create_abandoned_cart_event,
     enqueue_order_automation_events,
@@ -17,9 +17,7 @@ from app.modules.automation.automation_service import (
 )
 from app.modules.ecommerce.core.ecommerce_serializers import (
     serialize_ecommerce_connection,
-    serialize_ecommerce_customer,
     serialize_ecommerce_order,
-    serialize_ecommerce_product,
 )
 from app.modules.ecommerce.ecommerce_schema import (
     AbandonedCartRequest,
@@ -268,22 +266,12 @@ async def list_ecommerce_products(
     q: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    statement = select(EcommerceProduct)
-    if connection_id is not None:
-        statement = statement.where(EcommerceProduct.connection_id == connection_id)
-    if q:
-        search = f"%{q.strip()}%"
-        statement = statement.where(
-            or_(
-                EcommerceProduct.title.ilike(search),
-                EcommerceProduct.description.ilike(search),
-                EcommerceProduct.tags.ilike(search),
-                EcommerceProduct.sku.ilike(search),
-            )
-        )
-    result = await db.execute(statement.order_by(EcommerceProduct.updated_at.desc()).limit(200))
-    rows = result.scalars().all()
-    return [serialize_ecommerce_product(row) for row in rows]
+    return {
+        "status": "skipped",
+        "reason": "live_api_mode",
+        "message": "Products are read directly from the ecommerce API and cached in Redis; Neon is not used as the product catalog.",
+        "data": [],
+    }
 
 
 @ecommerce_router.post("/sync-active")
@@ -427,38 +415,12 @@ async def shopify_fulfillments_webhook(
         connection, body, event = _shopify_webhook_context_sync(sync_db, raw_body, headers)
         if body.get("_duplicate"):
             return {"status": "ignored", "reason": "duplicate"}
-        order_id = str(body.get("order_id") or body.get("order") or "")
-        order = sync_db.execute(
-            select(EcommerceOrder)
-            .where(
-                EcommerceOrder.connection_id == connection.id,
-                EcommerceOrder.external_id == order_id,
-            )
-        ).scalars().first()
-        if not order:
-            mark_shopify_webhook_event(sync_db, event, "processed")
-            return {"status": "accepted", "reason": "order_not_synced_yet"}
-
-        tracking_number = body.get("tracking_number")
-        tracking_url = body.get("tracking_url")
-        if tracking_number:
-            order.tracking_number = tracking_number
-        if tracking_url:
-            order.tracking_url = tracking_url
-        order.courier_company = body.get("tracking_company") or order.courier_company
-        order.shipment_status = body.get("shipment_status") or body.get("status") or order.shipment_status
-        order.fulfillment_status = "fulfilled"
-        order.raw_payload = json.dumps({**(json.loads(order.raw_payload or "{}")), "latest_fulfillment": body})
-        sync_db.commit()
-        sync_db.refresh(order)
-
-        events = enqueue_order_automation_events(sync_db, order, source="shopify_webhook")
-        automation_results = [process_automation_event(sync_db, event_row) for event_row in events]
         mark_shopify_webhook_event(sync_db, event, "processed")
         return {
-            "status": "success",
-            "order": serialize_ecommerce_order(order),
-            "automations": automation_results,
+            "status": "accepted",
+            "reason": "live_api_mode",
+            "message": "Fulfillment webhooks are acknowledged without storing Shopify order data in Neon.",
+            "connection_id": connection.id,
         }
 
     return await db.run_sync(sync_op)
@@ -599,37 +561,23 @@ async def list_ecommerce_orders(
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    statement = select(EcommerceOrder)
-    if platform:
-        statement = statement.where(EcommerceOrder.platform == platform.strip().lower())
-    if phone:
-        statement = statement.where(EcommerceOrder.phone == phone)
-    if status:
-        statement = statement.where(EcommerceOrder.status == status)
-
-    result = await db.execute(statement.order_by(EcommerceOrder.updated_at.desc()).limit(200))
-    rows = result.scalars().all()
-    return [serialize_ecommerce_order(row) for row in rows]
+    return {
+        "status": "skipped",
+        "reason": "live_api_mode",
+        "message": "Orders are read directly from the ecommerce API and cached in Redis; Neon is not used as the order store.",
+        "data": [],
+    }
 
 
 @ecommerce_router.get("/orders/{order_id}")
 async def get_ecommerce_order(order_id: str, db: AsyncSession = Depends(get_db)):
-    normalized_order_id = order_id.strip().lstrip("#")
-    result = await db.execute(
-        select(EcommerceOrder)
-        .where(
-            or_(
-                EcommerceOrder.order_number == order_id,
-                EcommerceOrder.order_number == f"#{normalized_order_id}",
-                EcommerceOrder.external_id == normalized_order_id,
-            )
-        )
-        .order_by(EcommerceOrder.updated_at.desc())
-    )
-    row = result.scalars().first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Ecommerce order not found")
-    return serialize_ecommerce_order(row)
+    return {
+        "status": "skipped",
+        "reason": "live_api_mode",
+        "message": "Order details are read directly from the ecommerce API when requested; Neon is not used as the order store.",
+        "order_id": order_id,
+        "data": None,
+    }
 
 
 @ecommerce_router.get("/customers")
@@ -639,16 +587,12 @@ async def list_ecommerce_customers(
     email: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    statement = select(EcommerceCustomer)
-    if connection_id is not None:
-        statement = statement.where(EcommerceCustomer.connection_id == connection_id)
-    if phone:
-        statement = statement.where(EcommerceCustomer.phone == phone)
-    if email:
-        statement = statement.where(EcommerceCustomer.email == email)
-    result = await db.execute(statement.order_by(EcommerceCustomer.updated_at.desc()).limit(200))
-    rows = result.scalars().all()
-    return [serialize_ecommerce_customer(row) for row in rows]
+    return {
+        "status": "skipped",
+        "reason": "live_api_mode",
+        "message": "Customers are read directly from the ecommerce API and cached temporarily when needed; Neon is not used as the customer store.",
+        "data": [],
+    }
 
 
 @ecommerce_router.post("/automations/delivered-followups")

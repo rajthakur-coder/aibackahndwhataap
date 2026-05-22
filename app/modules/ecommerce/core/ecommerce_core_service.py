@@ -120,7 +120,7 @@ def create_connection(
         if platform == "shopify":
             existing.myshopify_domain = existing.myshopify_domain or store_url
         if access_token:
-            existing.access_token = access_token
+            existing.access_token = None
             existing.encrypted_access_token = _encrypt_token(access_token)
         if consumer_key:
             existing.consumer_key = consumer_key
@@ -138,7 +138,7 @@ def create_connection(
         store_url=store_url,
         status="syncing" if platform == "shopify" and not run_bootstrap else "active",
         myshopify_domain=store_url if platform == "shopify" else None,
-        access_token=access_token,
+        access_token=None if platform == "shopify" else access_token,
         encrypted_access_token=_encrypt_token(access_token),
         consumer_key=consumer_key,
         consumer_secret=consumer_secret,
@@ -166,7 +166,7 @@ def update_connection(
     if store_url is not None:
         connection.store_url = _normalize_store_url(store_url, connection.platform)
     if access_token:
-        connection.access_token = access_token
+        connection.access_token = None
         connection.encrypted_access_token = _encrypt_token(access_token)
     if consumer_key:
         connection.consumer_key = consumer_key
@@ -676,24 +676,13 @@ def _normalize_product(connection: EcommerceConnection, product: dict) -> dict:
 
 def upsert_product(db: Session, connection: EcommerceConnection, product: dict) -> EcommerceProduct:
     normalized = _normalize_product(connection, product)
-    row = db.execute(
-        select(EcommerceProduct)
-        .where(
-            EcommerceProduct.connection_id == connection.id,
-            EcommerceProduct.external_id == normalized["external_id"],
-        )
-    ).scalars().first()
-    if not row:
-        row = EcommerceProduct(
-            tenant_id=connection.tenant_id,
-            connection_id=connection.id,
-            platform=connection.platform,
-            external_id=normalized["external_id"],
-            title=normalized["title"],
-        )
-        db.add(row)
-
-    row.tenant_id = connection.tenant_id
+    row = EcommerceProduct(
+        tenant_id=connection.tenant_id,
+        connection_id=connection.id,
+        platform=connection.platform,
+        external_id=normalized["external_id"],
+        title=normalized["title"],
+    )
     row.shopify_product_id = normalized["shopify_product_id"]
     row.title = normalized["title"]
     row.handle = normalized["handle"]
@@ -718,9 +707,6 @@ def upsert_product(db: Session, connection: EcommerceConnection, product: dict) 
     row.seo_title = normalized["seo_title"]
     row.seo_description = normalized["seo_description"]
     row.image_urls = _json_dumps(normalized["image_urls"])
-    row.raw_payload = _json_dumps(product)
-    db.commit()
-    db.refresh(row)
     return row
 
 
@@ -754,73 +740,20 @@ def product_knowledge_text(product: EcommerceProduct) -> str:
 
 
 def sync_products(db: Session, connection: EcommerceConnection, limit: int = 100) -> dict:
-    products = fetch_products(connection, limit=limit)
-    synced = [upsert_product(db, connection, product) for product in products]
-    connection.last_sync_at = datetime.utcnow()
-    db.commit()
-    return {"status": "success", "fetched": len(products), "synced": len(synced)}
+    return {
+        "status": "skipped",
+        "reason": "live_api_mode",
+        "message": "Products are read directly from the ecommerce API and cached in Redis; they are not stored in Neon.",
+        "connection_id": connection.id,
+    }
 
 
 def sync_inventory(db: Session, connection: EcommerceConnection, limit: int = 100) -> dict:
-    if connection.platform != "shopify":
-        return {"status": "skipped", "reason": "inventory sync is only available for Shopify"}
-
-    products = fetch_products(connection, limit=limit)
-    inventory_item_to_product: dict[str, str] = {}
-    for product in products:
-        product_id = str(product.get("id") or "")
-        for variant in product.get("variants") or []:
-            inventory_item_id = variant.get("inventory_item_id")
-            if inventory_item_id and product_id:
-                inventory_item_to_product[str(inventory_item_id)] = product_id
-
-    if not inventory_item_to_product:
-        return {"status": "success", "inventory_items": 0, "updated_products": 0}
-
-    locations = fetch_locations(connection)
-    location_names = {
-        str(location.get("id")): location.get("name") or str(location.get("id"))
-        for location in locations
-        if location.get("id")
-    }
-
-    product_totals: dict[str, int] = {}
-    product_locations: dict[str, list[str]] = {}
-    inventory_item_ids = list(inventory_item_to_product)
-    for index in range(0, len(inventory_item_ids), 50):
-        chunk = inventory_item_ids[index : index + 50]
-        for level in fetch_inventory_levels(connection, inventory_item_ids=chunk):
-            product_id = inventory_item_to_product.get(str(level.get("inventory_item_id") or ""))
-            if not product_id:
-                continue
-            available = _int_value(level.get("available"))
-            product_totals[product_id] = product_totals.get(product_id, 0) + available
-            location_id = str(level.get("location_id") or "")
-            location_name = location_names.get(location_id, location_id)
-            if location_name:
-                product_locations.setdefault(product_id, []).append(f"{location_name}: {available}")
-
-    updated = 0
-    for product_id, total in product_totals.items():
-        row = db.execute(
-            select(EcommerceProduct).where(
-                EcommerceProduct.connection_id == connection.id,
-                EcommerceProduct.external_id == product_id,
-            )
-        ).scalars().first()
-        if not row:
-            continue
-        detail = "; ".join(product_locations.get(product_id, [])[:8])
-        row.inventory = f"total: {total}" + (f"; {detail}" if detail else "")
-        updated += 1
-
-    connection.last_sync_at = datetime.utcnow()
-    db.commit()
     return {
-        "status": "success",
-        "inventory_items": len(inventory_item_ids),
-        "locations": len(locations),
-        "updated_products": updated,
+        "status": "skipped",
+        "reason": "live_api_mode",
+        "message": "Inventory is read directly from the ecommerce API when needed; it is not stored in Neon.",
+        "connection_id": connection.id,
     }
 
 
@@ -844,11 +777,12 @@ def sync_abandoned_checkouts(db: Session, connection: EcommerceConnection, limit
 
 
 def sync_customers(db: Session, connection: EcommerceConnection, limit: int = 100) -> dict:
-    customers = fetch_customers(connection, limit=limit)
-    synced = [upsert_customer(db, connection, customer) for customer in customers]
-    connection.last_sync_at = datetime.utcnow()
-    db.commit()
-    return {"status": "success", "fetched": len(customers), "synced": len([row for row in synced if row])}
+    return {
+        "status": "skipped",
+        "reason": "live_api_mode",
+        "message": "Customers are read directly from the ecommerce API and cached temporarily when needed; they are not stored in Neon.",
+        "connection_id": connection.id,
+    }
 
 
 def _abandoned_checkout_payload(checkout: dict) -> dict:
@@ -1029,23 +963,13 @@ def _shopify_customer_name(customer: dict, shipping: dict | None = None) -> str 
 def upsert_customer(db: Session, connection: EcommerceConnection, customer: dict | None) -> EcommerceCustomer | None:
     if not isinstance(customer, dict) or not customer.get("id"):
         return None
-    row = db.execute(
-        select(EcommerceCustomer)
-        .where(
-            EcommerceCustomer.connection_id == connection.id,
-            EcommerceCustomer.external_id == str(customer.get("id")),
-        )
-    ).scalars().first()
-    if not row:
-        row = EcommerceCustomer(
-            tenant_id=connection.tenant_id,
-            connection_id=connection.id,
-            platform=connection.platform,
-            external_id=str(customer.get("id")),
-            shopify_customer_id=str(customer.get("id")),
-        )
-        db.add(row)
-    row.tenant_id = connection.tenant_id
+    row = EcommerceCustomer(
+        tenant_id=connection.tenant_id,
+        connection_id=connection.id,
+        platform=connection.platform,
+        external_id=str(customer.get("id")),
+        shopify_customer_id=str(customer.get("id")),
+    )
     row.name = _shopify_customer_name(customer)
     row.phone = customer.get("phone") or customer.get("default_address", {}).get("phone") or row.phone
     row.email = customer.get("email") or row.email
@@ -1056,9 +980,6 @@ def upsert_customer(db: Session, connection: EcommerceConnection, customer: dict
     row.last_order_at = customer.get("updated_at") or row.last_order_at
     row.marketing_consent = _json_dumps(customer.get("email_marketing_consent") or {})
     row.preferred_language = customer.get("locale") or row.preferred_language
-    row.raw_payload = _json_dumps(customer)
-    db.commit()
-    db.refresh(row)
     return row
 
 
@@ -1173,24 +1094,13 @@ def _normalize_order(connection: EcommerceConnection, order: dict) -> dict:
 def upsert_order(db: Session, connection: EcommerceConnection, order: dict) -> EcommerceOrder:
     normalized = _normalize_order(connection, order)
     customer = upsert_customer(db, connection, normalized.get("customer"))
-    row = db.execute(
-        select(EcommerceOrder)
-        .where(
-            EcommerceOrder.connection_id == connection.id,
-            EcommerceOrder.external_id == normalized["external_id"],
-        )
-    ).scalars().first()
-    if not row:
-        row = EcommerceOrder(
-            tenant_id=connection.tenant_id,
-            connection_id=connection.id,
-            platform=connection.platform,
-            external_id=normalized["external_id"],
-            order_number=normalized["order_number"],
-        )
-        db.add(row)
-
-    row.tenant_id = connection.tenant_id
+    row = EcommerceOrder(
+        tenant_id=connection.tenant_id,
+        connection_id=connection.id,
+        platform=connection.platform,
+        external_id=normalized["external_id"],
+        order_number=normalized["order_number"],
+    )
     row.shopify_order_id = normalized["shopify_order_id"]
     row.ecommerce_customer_id = customer.id if customer else row.ecommerce_customer_id
     row.order_number = normalized["order_number"]
@@ -1220,20 +1130,18 @@ def upsert_order(db: Session, connection: EcommerceConnection, order: dict) -> E
     row.skus = _json_dumps(normalized["skus"])
     row.product_ids = _json_dumps(normalized["product_ids"])
     row.items = _json_dumps(normalized["items"])
-    row.raw_payload = _json_dumps(order)
     row.shopify_created_at = normalized["shopify_created_at"]
     row.shopify_updated_at = normalized["shopify_updated_at"]
-    db.commit()
-    db.refresh(row)
     return row
 
 
 def sync_orders(db: Session, connection: EcommerceConnection, limit: int = 50) -> dict:
-    orders = fetch_orders(connection, limit=limit)
-    synced = [upsert_order(db, connection, order) for order in orders]
-    connection.last_sync_at = datetime.utcnow()
-    db.commit()
-    return {"status": "success", "fetched": len(orders), "synced": len(synced)}
+    return {
+        "status": "skipped",
+        "reason": "live_api_mode",
+        "message": "Orders are read directly from the ecommerce API and cached in Redis; they are not stored in Neon.",
+        "connection_id": connection.id,
+    }
 
 
 def find_order_for_customer(db: Session, phone: str, order_id: str | None = None) -> EcommerceOrder | None:
@@ -1454,7 +1362,7 @@ def record_shopify_webhook_event(
         topic=topic,
         webhook_id=webhook_id,
         payload_hash=payload_hash,
-        raw_payload=raw_body.decode("utf-8", errors="replace"),
+        raw_payload=None,
         status="pending",
         attempts=1,
     )

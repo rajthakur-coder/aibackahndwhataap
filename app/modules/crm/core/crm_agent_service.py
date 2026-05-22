@@ -5,7 +5,6 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.modules.ecommerce.core.ecommerce_core_service import find_order_for_customer, order_status_text
 from app.modules.ai.core.intelligence_service import detect_query_intent
 from app.models.crm import (
     AgentAction,
@@ -353,17 +352,7 @@ def process_agent_message(db: Session, phone: str, message: str) -> dict:
         action_results.append({"appointment_id": appointment.id, "appointment_status": appointment.status})
 
     if intent == "order_status":
-        ecommerce_order = find_order_for_customer(db, phone, order_id)
-        if ecommerce_order:
-            reply_override = order_status_text(ecommerce_order)
-            action_results.append(
-                {
-                    "ecommerce_order_id": ecommerce_order.id,
-                    "order_id": ecommerce_order.order_number,
-                    "found": True,
-                }
-            )
-        elif order_id:
+        if order_id:
             order = db.execute(
                 select(OrderStatus).where(OrderStatus.order_id == order_id)
             ).scalars().first()
