@@ -787,6 +787,14 @@ def sync_inventory(db: Session, connection: EcommerceConnection, limit: int = 10
 
 
 def sync_abandoned_checkouts(db: Session, connection: EcommerceConnection, limit: int = 50) -> dict:
+    if not settings.ecommerce_auto_sync_checkouts_enabled:
+        return {
+            "status": "skipped",
+            "reason": "checkout_auto_sync_disabled",
+            "message": "Shopify abandoned checkout sync is paused. Use /ecommerce/abandoned-cart for manual tests.",
+            "connection_id": connection.id,
+        }
+
     if connection.platform != "shopify":
         return {"status": "skipped", "reason": "checkout sync is only available for Shopify"}
 

@@ -35,10 +35,12 @@ class Settings(BaseSettings):
     router_model: str = ""
 
     ecommerce_auto_sync_enabled: bool = True
+    ecommerce_auto_sync_checkouts_enabled: bool = False
     ecommerce_auto_sync_interval_seconds: int = 300
     ecommerce_auto_sync_limit: int = 50
     ecommerce_auto_sync_products_enabled: bool = True
     ecommerce_auto_sync_product_limit: int = 100
+    shopify_webhook_automation_enabled: bool = False
     shopify_product_cache_ttl_seconds: int = 300
     shopify_query_cache_ttl_seconds: int = 300
     shopify_order_cache_ttl_seconds: int = 60

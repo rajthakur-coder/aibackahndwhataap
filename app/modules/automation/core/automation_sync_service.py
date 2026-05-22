@@ -24,6 +24,13 @@ TRIGGER_ORDER_DELIVERED = "order_delivered"
 TRIGGER_CART_ABANDONED = "cart_abandoned"
 TRIGGER_COD_VERIFICATION = "cod_verification"
 TRIGGER_FEEDBACK_REQUEST = "feedback_request"
+PAUSED_SHOPIFY_AUTOMATION_SOURCES = {
+    "shopify_checkouts_api",
+    "ecommerce_abandoned_cart_webhook",
+    "shopify_webhook",
+    "shopify_fulfillment_webhook",
+    "ecommerce_order_webhook",
+}
 
 VARIABLE_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}")
 TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -450,6 +457,23 @@ def create_automation_event(
 def process_automation_event(db: Session, event: AutomationEvent) -> dict:
     if event.status == "processed":
         return {"status": "skipped", "reason": "already_processed"}
+    if (
+        not settings.shopify_webhook_automation_enabled
+        and str(event.source or "").strip() in PAUSED_SHOPIFY_AUTOMATION_SOURCES
+    ):
+        event.status = "paused"
+        event.error = "Shopify/live ecommerce automation is paused; manual ecommerce_api tests are still allowed."
+        db.commit()
+        return {
+            "status": "paused",
+            "event_id": event.id,
+            "reason": "shopify_automation_paused",
+            "sent": 0,
+            "failed": 0,
+            "skipped": 1,
+            "pending_delayed": 0,
+            "errors": [],
+        }
     if event.scheduled_for and event.scheduled_for > _utcnow_like(event.scheduled_for):
         return {"status": "skipped", "reason": "not_due"}
 

@@ -13,6 +13,17 @@ from app.modules.ecommerce.core.ecommerce_core_service import sync_abandoned_che
 
 
 def sync_active_ecommerce_connections_with_session(db: Session) -> dict:
+    if not settings.ecommerce_auto_sync_checkouts_enabled:
+        return {
+            "status": "skipped",
+            "reason": "checkout_auto_sync_disabled",
+            "message": "Shopify abandoned checkout auto-sync is paused. Use /ecommerce/abandoned-cart for manual tests.",
+            "connections": 0,
+            "synced": 0,
+            "failed": 0,
+            "results": [],
+        }
+
     connections = db.execute(
         select(EcommerceConnection)
         .where(EcommerceConnection.status == "active")
