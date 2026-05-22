@@ -129,6 +129,16 @@ def _utcnow_like(value: datetime | None = None) -> datetime:
     return now
 
 
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _db_naive(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def ensure_default_automation_rules(db: Session) -> dict:
     created = 0
     templates_created = 0
@@ -429,7 +439,7 @@ def create_automation_event(
         phone=phone or payload.get("phone"),
         payload=json.dumps(payload, ensure_ascii=True),
         status="pending",
-        scheduled_for=_utcnow_like() + timedelta(seconds=delay_seconds),
+        scheduled_for=_utcnow_naive() + timedelta(seconds=delay_seconds),
     )
     db.add(event)
     db.commit()
@@ -478,7 +488,7 @@ def process_automation_event(db: Session, event: AutomationEvent) -> dict:
 
         due_at = event.created_at + timedelta(seconds=max(0, rule.delay_seconds or 0))
         if due_at > _utcnow_like(due_at):
-            event.scheduled_for = due_at
+            event.scheduled_for = _db_naive(due_at)
             pending_delayed += 1
             continue
 
@@ -505,7 +515,7 @@ def process_automation_event(db: Session, event: AutomationEvent) -> dict:
             response = _send_rule_message(db, rule, execution.phone, message, payload)
             execution.status = "sent"
             execution.provider_response = json.dumps(response, ensure_ascii=True)
-            execution.sent_at = _utcnow_like(execution.sent_at)
+            execution.sent_at = _utcnow_naive()
             save_message(db, execution.phone, message, "outgoing")
             sent += 1
         except Exception as exc:
@@ -524,7 +534,7 @@ def process_automation_event(db: Session, event: AutomationEvent) -> dict:
             errors.append({"rule_id": rule.id, "error": str(exc)})
         db.commit()
 
-    event.processed_at = _utcnow_like(event.processed_at)
+    event.processed_at = _utcnow_naive()
     if pending_delayed:
         event.status = "pending"
         event.processed_at = None
@@ -549,7 +559,7 @@ def process_due_automation_events(db: Session, limit: int = 50) -> dict:
         select(AutomationEvent)
         .where(
             AutomationEvent.status == "pending",
-            AutomationEvent.scheduled_for <= _utcnow_like(),
+            AutomationEvent.scheduled_for <= _utcnow_naive(),
         )
         .order_by(AutomationEvent.scheduled_for.asc())
         .limit(max(1, min(limit, 200)))
