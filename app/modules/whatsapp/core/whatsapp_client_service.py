@@ -151,6 +151,93 @@ def send_whatsapp_product_list(
     return response.json()
 
 
+def send_whatsapp_carousel(
+    phone: str,
+    products: list[dict],
+    body_text: str,
+    button_text: str = "Buy now",
+) -> dict:
+    access_token = settings.access_token
+    phone_number_id = settings.phone_number_id
+
+    if not access_token or not phone_number_id:
+        raise RuntimeError("WhatsApp credentials are not configured")
+    if not phone:
+        raise ValueError("Phone is required")
+
+    cards = []
+    for product in products:
+        image_url = product.get("image_url")
+        product_url = product.get("product_url")
+        if not image_url or not product_url:
+            continue
+
+        title = str(product.get("title") or "Product").strip()
+        price = str(product.get("price") or product.get("price_min") or "").strip()
+        description = str(product.get("description") or product.get("caption") or "").strip()
+        body_parts = [f"*{title[:80]}*"]
+        if price:
+            body_parts.append(f"Price: {price}")
+        if description and description != title:
+            body_parts.append(description[:90])
+
+        card_index = len(cards)
+        cards.append(
+            {
+                "card_index": card_index,
+                "type": "cta_url",
+                "header": {
+                    "type": "image",
+                    "image": {"link": image_url},
+                },
+                "body": {
+                    "text": "\n".join(body_parts)[:160],
+                },
+                "action": {
+                    "name": "cta_url",
+                    "parameters": {
+                        "display_text": button_text[:20],
+                        "url": product_url,
+                    },
+                },
+            }
+        )
+        if len(cards) >= 5:
+            break
+
+    if len(cards) < 2:
+        raise ValueError("Carousel requires at least 2 products with public image and product URL")
+
+    url = (
+        f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/"
+        f"{phone_number_id}/messages"
+    )
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": phone,
+        "type": "interactive",
+        "interactive": {
+            "type": "carousel",
+            "body": {"text": body_text[:1024]},
+            "action": {"cards": cards},
+        },
+    }
+
+    response = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def send_whatsapp_template(
     phone: str,
     template_name: str,

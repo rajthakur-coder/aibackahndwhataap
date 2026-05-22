@@ -29,7 +29,12 @@ from app.modules.ecommerce.core.shopify_cache_service import (
     find_cached_shopify_product_recommendations,
     find_cached_shopify_top_selling_products,
 )
-from app.modules.whatsapp.core.whatsapp_client_service import send_whatsapp_image, send_whatsapp_message, send_whatsapp_product_list
+from app.modules.whatsapp.core.whatsapp_client_service import (
+    send_whatsapp_carousel,
+    send_whatsapp_image,
+    send_whatsapp_message,
+    send_whatsapp_product_list,
+)
 
 
 IMAGE_REQUEST_TERMS = {
@@ -162,6 +167,15 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         top_selling_products = await find_cached_shopify_top_selling_products(db, limit=requested_limit)
         if top_selling_products:
             remember_last_products(db, phone, top_selling_products)
+            carousel_sent = await _try_send_product_carousel(
+                phone,
+                top_selling_products,
+                "Ye top-selling products hain.",
+            )
+            if carousel_sent:
+                save_message(db, phone, "[carousel] Top selling products", "outgoing")
+                _mark_processed(db, event)
+                return
             product_list_sent = await _try_send_product_list(
                 phone,
                 top_selling_products,
@@ -218,6 +232,16 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
     )
     if recommended_products:
         remember_last_products(db, phone, recommended_products)
+        carousel_sent = await _try_send_product_carousel(
+            phone,
+            recommended_products,
+            "Aapke liye matching products.",
+        )
+        if carousel_sent:
+            save_message(db, phone, "[carousel] Recommended products", "outgoing")
+            await _send_cross_sell_products(db, phone, query_text, recommended_products)
+            _mark_processed(db, event)
+            return
         product_list_sent = await _try_send_product_list(
             phone,
             recommended_products,
@@ -273,6 +297,16 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         catalog_products = []
     if catalog_products:
         remember_last_products(db, phone, catalog_products)
+        carousel_sent = await _try_send_product_carousel(
+            phone,
+            catalog_products,
+            "Catalog products dekh sakte hain.",
+        )
+        if carousel_sent:
+            save_message(db, phone, "[carousel] Catalog", "outgoing")
+            await _send_cross_sell_products(db, phone, query_text, catalog_products)
+            _mark_processed(db, event)
+            return
         product_list_sent = await _try_send_product_list(
             phone,
             catalog_products,
@@ -432,7 +466,7 @@ def _requested_limit_from_understanding(understanding, query_text: str) -> int:
         limit = int(float(understanding.entities.get("limit") or 0))
     except (TypeError, ValueError):
         limit = 0
-    return limit or extract_requested_limit(query_text, default=3)
+    return limit or extract_requested_limit(query_text, default=5)
 
 
 def _understanding_context(understanding, agent_context: str) -> str:
@@ -475,6 +509,24 @@ async def _try_send_product_list(
             body_text,
             header_text,
             "Products",
+        )
+    except Exception:
+        return False
+    return True
+
+
+async def _try_send_product_carousel(
+    phone: str,
+    products: list[dict],
+    body_text: str,
+) -> bool:
+    try:
+        await run_in_threadpool(
+            send_whatsapp_carousel,
+            phone,
+            products,
+            body_text,
+            "Buy now",
         )
     except Exception:
         return False
