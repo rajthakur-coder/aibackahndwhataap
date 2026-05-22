@@ -90,7 +90,7 @@ DEFAULT_RULES = [
         "message_body": (
             "Hi {{customer_name}}, you left items in your cart. Tap the button below to complete your order."
         ),
-        "delay_seconds": 120,
+        "delay_seconds": settings.abandoned_cart_delay_seconds,
     },
     {
         "name": "Feedback Request",
@@ -161,7 +161,9 @@ def ensure_default_automation_rules(db: Session) -> dict:
             if exists.message_template_id != template.id:
                 exists.message_template_id = template.id
                 exists.message_body = None
+            if exists.delay_seconds != rule_data["delay_seconds"]:
                 exists.delay_seconds = rule_data["delay_seconds"]
+            if exists.enabled != "true":
                 exists.enabled = "true"
             continue
         db.add(

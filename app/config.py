@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     automation_processor_enabled: bool = True
     automation_processor_interval_seconds: int = 60
     automation_processor_limit: int = 50
+    abandoned_cart_delay_seconds: int = 120
 
     model_config = SettingsConfigDict(
         env_file=(".env", f".env.{ENV}"),
