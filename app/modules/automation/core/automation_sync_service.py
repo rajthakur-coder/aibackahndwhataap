@@ -1,7 +1,7 @@
 import asyncio
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -120,6 +120,13 @@ def bool_to_db(value: bool) -> str:
 
 def db_to_bool(value: str | None) -> bool:
     return str(value or "").strip().lower() in TRUE_VALUES
+
+
+def _utcnow_like(value: datetime | None = None) -> datetime:
+    now = datetime.now(timezone.utc)
+    if value is not None and value.tzinfo is None:
+        return now.replace(tzinfo=None)
+    return now
 
 
 def ensure_default_automation_rules(db: Session) -> dict:
@@ -422,7 +429,7 @@ def create_automation_event(
         phone=phone or payload.get("phone"),
         payload=json.dumps(payload, ensure_ascii=True),
         status="pending",
-        scheduled_for=datetime.utcnow() + timedelta(seconds=delay_seconds),
+        scheduled_for=_utcnow_like() + timedelta(seconds=delay_seconds),
     )
     db.add(event)
     db.commit()
@@ -433,7 +440,7 @@ def create_automation_event(
 def process_automation_event(db: Session, event: AutomationEvent) -> dict:
     if event.status == "processed":
         return {"status": "skipped", "reason": "already_processed"}
-    if event.scheduled_for and event.scheduled_for > datetime.utcnow():
+    if event.scheduled_for and event.scheduled_for > _utcnow_like(event.scheduled_for):
         return {"status": "skipped", "reason": "not_due"}
 
     payload = _message_context(event)
@@ -470,7 +477,7 @@ def process_automation_event(db: Session, event: AutomationEvent) -> dict:
             continue
 
         due_at = event.created_at + timedelta(seconds=max(0, rule.delay_seconds or 0))
-        if due_at > datetime.utcnow():
+        if due_at > _utcnow_like(due_at):
             event.scheduled_for = due_at
             pending_delayed += 1
             continue
@@ -498,7 +505,7 @@ def process_automation_event(db: Session, event: AutomationEvent) -> dict:
             response = _send_rule_message(db, rule, execution.phone, message, payload)
             execution.status = "sent"
             execution.provider_response = json.dumps(response, ensure_ascii=True)
-            execution.sent_at = datetime.utcnow()
+            execution.sent_at = _utcnow_like(execution.sent_at)
             save_message(db, execution.phone, message, "outgoing")
             sent += 1
         except Exception as exc:
@@ -517,7 +524,7 @@ def process_automation_event(db: Session, event: AutomationEvent) -> dict:
             errors.append({"rule_id": rule.id, "error": str(exc)})
         db.commit()
 
-    event.processed_at = datetime.utcnow()
+    event.processed_at = _utcnow_like(event.processed_at)
     if pending_delayed:
         event.status = "pending"
         event.processed_at = None
@@ -542,7 +549,7 @@ def process_due_automation_events(db: Session, limit: int = 50) -> dict:
         select(AutomationEvent)
         .where(
             AutomationEvent.status == "pending",
-            AutomationEvent.scheduled_for <= datetime.utcnow(),
+            AutomationEvent.scheduled_for <= _utcnow_like(),
         )
         .order_by(AutomationEvent.scheduled_for.asc())
         .limit(max(1, min(limit, 200)))
