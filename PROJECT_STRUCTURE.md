@@ -1,50 +1,60 @@
 # Backend Structure
 
-This backend is organized as a package-first FastAPI application.
+This backend follows the same package-first FastAPI style as `alignlabs-backend`.
 
 ```text
 backend/
-  run.py               # Local uvicorn entrypoint
-  worker.py            # Future background worker entrypoint
-  alembic.ini          # Alembic config, points to app/alembic
+  run.py                 # Local uvicorn entrypoint
+  worker.py              # Background worker entrypoint placeholder
+  main.py                # Compatibility entrypoint that imports app.main
+  alembic.ini            # Alembic config, points to app/alembic
+  requirements.txt       # Python dependencies
+  .env.example           # Required environment variables
   app/
-    alembic/           # Database migrations
-    config.py          # Environment loading and app settings
+    __init__.py
+    config.py            # Environment loading and app settings
+    main.py              # FastAPI app wiring, router registration, startup loops
+    alembic/             # Database migrations
+      env.py
+      script.py.mako
+      versions/
     db/
-      session.py       # SQLAlchemy engine, SessionLocal, Base, get_db
-      mixins.py        # Shared SQLAlchemy mixins
-    models/
-      entities.py      # SQLAlchemy models
-    modules/           # Domain modules with router/schema/service files
+      base.py            # Imports models for Alembic metadata
+      mixins.py          # Shared SQLAlchemy mixins
+      session.py         # SQLAlchemy engine, SessionLocal, Base, get_db
+    models/              # SQLAlchemy models grouped by domain
+      automation.py
+      contact.py
+      crm.py
+      ecommerce.py
+      whatsapp.py
+    modules/             # Domain modules with router/schema/service files
       ai/
+        core/            # AI routing, query understanding, recommendations
       automation/
+        core/            # Automation scheduling and execution internals
       crm/
+        core/            # CRM agent and customer memory internals
       ecommerce/
-      rag/
+        core/            # Shopify/WooCommerce sync, cache, serializers
       system/
       whatsapp/
-    services/
-      agent.py         # CRM/lead/appointment agent logic
-      ecommerce.py     # Ecommerce sync/order/product logic
-      ecommerce_sync.py # Scheduled ecommerce sync orchestration
-      intelligence.py   # Query intent and policy type detection
-      structured_extraction.py # AI/heuristic extraction into structured tables
-      conversation_memory.py # Last question/product memory helpers
-      messages.py      # Conversation message persistence
-      openai_chat.py   # OpenRouter chat replies
-      pinecone.py      # Pinecone vector storage/retrieval
-      rag.py           # RAG chunking/retrieval/image lookup
-      sales_recommendations.py # Product recommendations and WhatsApp catalog suggestions
-      scraper.py       # Website crawling/scraping
-      serializers.py   # Response serialization helpers
-      webhook_processor.py # WhatsApp webhook processing flow
-      whatsapp.py      # WhatsApp Cloud API messaging
-    shared/            # Cross-cutting helpers and shared schemas
-    utils/             # Shared utility helpers
-    security/          # Auth/security dependencies
-    queue/             # Queue/worker integration points
-    mail_templates/    # Email templates
-    main.py            # FastAPI app wiring and router registration
+        core/            # WhatsApp Cloud API, live chat, webhook processing
+    shared/              # Cross-cutting helpers and shared schemas
+    security/            # Auth/security dependencies
+    queue/               # Queue/worker integration points
+    mail_templates/      # Email template package placeholder
+    utils/               # Shared utility package placeholder
 ```
 
-Use `uvicorn app.main:app` for the package entrypoint.
+Module convention:
+
+```text
+app/modules/<domain>/
+  <domain>_router.py     # FastAPI endpoints
+  <domain>_schema.py     # Pydantic request/response schemas
+  <domain>_service.py    # Public service facade used by routers
+  core/                  # Larger internal domain logic, clients, processors
+```
+
+Use `uvicorn app.main:app` or `python run.py` for the package entrypoint.

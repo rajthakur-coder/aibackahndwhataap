@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.models.crm import AgentAction
+from app.models.crm import AgentAction, HandoffTicket
 from app.models.whatsapp import WebhookEvent
 from app.modules.crm.core.crm_agent_service import process_agent_message
 from app.modules.ai.core.ai_tools_service import ToolDecision, decide_tool_for_message, run_ai_tool
@@ -211,6 +211,28 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         )
         remember_last_question(db, phone, text)
 
+    active_handoff = _active_handoff_ticket(db, phone)
+    if active_handoff:
+        _append_handoff_summary(db, active_handoff, "incoming", text)
+        handoff_text = _localized(
+            _reply_language(text),
+            f"Your request is already with our support team. Ticket #{active_handoff.id} is open, and they will reply shortly.",
+            f"Aapki request support team ke paas hai. Ticket #{active_handoff.id} open hai, team jaldi reply karegi.",
+        )
+        await run_in_threadpool(send_whatsapp_message, phone, handoff_text)
+        save_message(db, phone, handoff_text, "outgoing")
+        db.add(
+            AgentAction(
+                phone=phone,
+                action_type="handoff_message_received",
+                status="open",
+                payload=json.dumps({"ticket_id": active_handoff.id, "message": text}),
+            )
+        )
+        db.commit()
+        _mark_processed(db, event)
+        return
+
     understanding = understand_message(text)
     query_text = understanding.normalized_query or text
     db.add(
@@ -397,6 +419,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         db,
         query_text,
         limit=requested_limit,
+        entities=understanding.entities,
     )
     if recommended_products:
         remember_last_products(db, phone, recommended_products)
@@ -460,6 +483,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         db,
         query_text,
         limit=requested_limit,
+        entities=understanding.entities,
     )
     if not catalog_products:
         catalog_products = []
@@ -535,7 +559,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         _mark_processed(db, event)
         return
 
-    product_image = await find_cached_shopify_product_image(db, query_text)
+    product_image = await find_cached_shopify_product_image(db, query_text, entities=understanding.entities)
     if not product_image:
         product_image = None
     if product_image:
@@ -640,6 +664,23 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
 def _mark_processed(db: Session, event: WebhookEvent) -> None:
     event.status = "processed"
     event.processed_at = datetime.utcnow()
+    db.commit()
+
+
+def _active_handoff_ticket(db: Session, phone: str) -> HandoffTicket | None:
+    if not phone:
+        return None
+    return db.execute(
+        select(HandoffTicket)
+        .where(HandoffTicket.phone == phone, HandoffTicket.status == "open")
+        .order_by(HandoffTicket.updated_at.desc())
+    ).scalars().first()
+
+
+def _append_handoff_summary(db: Session, ticket: HandoffTicket, direction: str, message: str) -> None:
+    line = f"{direction}: {message}".strip()
+    ticket.summary = "\n".join(filter(None, [ticket.summary, line]))[-5000:]
+    ticket.updated_at = datetime.utcnow()
     db.commit()
 
 

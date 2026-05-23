@@ -116,6 +116,7 @@ async def list_handoffs(db: AsyncSession = Depends(get_db)):
             "status": row.status,
             "summary": row.summary,
             "created_at": str(row.created_at),
+            "updated_at": str(row.updated_at),
         }
         for row in rows
     ]
@@ -128,7 +129,7 @@ async def close_handoff(ticket_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Handoff ticket not found")
     ticket.status = "closed"
     await db.commit()
-    return {"status": "success", "ticket_id": ticket.id}
+    return {"status": "success", "ticket_id": ticket.id, "bot_resumed": True}
 
 
 @crm_router.get("/customers/{phone}/memory")

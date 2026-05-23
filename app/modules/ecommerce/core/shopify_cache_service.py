@@ -1,6 +1,6 @@
 import json
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 
 from redis.exceptions import RedisError
 from sqlalchemy import select
@@ -18,6 +18,8 @@ from app.modules.ecommerce.core.ecommerce_core_service import (
     fetch_order_by_number,
     fetch_orders,
     fetch_orders_for_sales,
+    fetch_shopify_collections,
+    fetch_shopify_collects,
 )
 from app.shared.redis import get_redis
 
@@ -87,10 +89,11 @@ async def find_cached_shopify_product_recommendations(
     db: Session,
     query: str,
     limit: int = 5,
+    entities: dict | None = None,
 ) -> list[dict]:
     if not is_sales_recommendation_request(query):
         return []
-    products = await _rank_cached_shopify_products(db, query, limit)
+    products = await _rank_cached_shopify_products(db, query, limit, entities=entities)
     return products
 
 
@@ -110,7 +113,7 @@ async def find_cached_shopify_cross_sell_products(
             for product in base_products
         )
     )[:160]
-    cache_key = f"shopify:cross-sell:v1:limit:{limit}:{signature}"
+    cache_key = f"shopify:cross-sell:v2:limit:{limit}:{signature}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
@@ -118,6 +121,11 @@ async def find_cached_shopify_cross_sell_products(
     products = await _cached_all_shopify_products(db)
     if not products:
         return []
+
+    result = await _frequently_bought_together_products(db, base_products, products, limit)
+    if result:
+        await _redis_set_json(cache_key, result, settings.shopify_query_cache_ttl_seconds)
+        return result
 
     exclude_titles = {str(product.get("title") or "").strip().lower() for product in base_products}
     exclude_ids = {
@@ -191,10 +199,11 @@ async def find_cached_shopify_catalog_products(
     db: Session,
     query: str,
     limit: int = 5,
+    entities: dict | None = None,
 ) -> list[dict]:
     if not is_catalog_request(query):
         return []
-    products = await _rank_cached_shopify_products(db, query, limit, allow_fallback=True)
+    products = await _rank_cached_shopify_products(db, query, limit, allow_fallback=True, entities=entities)
     return products
 
 
@@ -219,7 +228,10 @@ async def find_cached_shopify_category_products(
     if not products:
         return []
 
-    if category_key in {"all", "all products", "new", "new arrivals"}:
+    collection_products = await _cached_shopify_collection_products(db, category_key)
+    if collection_products:
+        result = collection_products[offset : offset + limit]
+    elif category_key in {"all", "all products", "new", "new arrivals"}:
         result = products[offset : offset + limit]
     else:
         query_terms = search_terms(category_key)
@@ -244,7 +256,7 @@ async def find_cached_shopify_catalog_categories(
     limit: int = 24,
 ) -> list[dict]:
     limit = max(1, min(limit, 50))
-    cache_key = f"shopify:categories:v3:limit:{limit}"
+    cache_key = f"shopify:categories:v4:limit:{limit}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
@@ -252,6 +264,12 @@ async def find_cached_shopify_catalog_categories(
     products = await _cached_all_shopify_products(db)
     if not products:
         return []
+
+    collection_categories = await _cached_shopify_collection_categories(db)
+    if collection_categories:
+        categories = collection_categories[:limit]
+        await _redis_set_json(cache_key, categories, settings.shopify_query_cache_ttl_seconds)
+        return categories
 
     counts: Counter[str] = Counter()
     exact_counts: Counter[str] = Counter()
@@ -292,10 +310,18 @@ async def find_cached_shopify_catalog_categories(
 async def find_cached_shopify_product_image(
     db: Session,
     query: str,
+    entities: dict | None = None,
 ) -> dict | None:
     if not is_image_request(query):
         return None
-    products = await _rank_cached_shopify_products(db, query, 1, require_image=True, allow_fallback=True)
+    products = await _rank_cached_shopify_products(
+        db,
+        query,
+        1,
+        require_image=True,
+        allow_fallback=True,
+        entities=entities,
+    )
     return products[0] if products else None
 
 
@@ -305,9 +331,10 @@ async def _rank_cached_shopify_products(
     limit: int,
     require_image: bool = False,
     allow_fallback: bool = False,
+    entities: dict | None = None,
 ) -> list[dict]:
     limit = max(1, min(limit, 10))
-    query_key = _query_cache_key(query, limit, require_image, allow_fallback)
+    query_key = _query_cache_key(query, limit, require_image, allow_fallback, entities)
     cached = await _redis_get_json(query_key)
     if isinstance(cached, list):
         return cached
@@ -318,10 +345,21 @@ async def _rank_cached_shopify_products(
     if not products:
         return []
 
-    query_terms = search_terms(query)
+    search_text = _structured_search_text(query, entities)
+    query_terms = search_terms(search_text)
+    budget_max = _budget_max(query, entities)
     scored = []
     for product in products:
+        if _hide_out_of_stock(query, entities) and not product.get("in_stock"):
+            continue
+        price = _product_price_number(product)
+        if budget_max and price and price > budget_max:
+            continue
         score = score_search_text(query_terms, product_search_text(product))
+        score += _structured_entity_score(product, entities)
+        score += _inventory_score(product)
+        if budget_max and price:
+            score += max(0.0, 1.0 - (price / budget_max))
         if product.get("image_url"):
             score += 0.15
         if product.get("product_url"):
@@ -335,6 +373,16 @@ async def _rank_cached_shopify_products(
     ]
     if allow_fallback and not ranked:
         ranked = [product for _score, product in sorted(scored, key=lambda item: item[0], reverse=True)]
+
+    if not ranked and _hide_out_of_stock(query, entities):
+        ranked = await _rank_cached_shopify_products(
+            db,
+            query,
+            limit,
+            require_image=require_image,
+            allow_fallback=allow_fallback,
+            entities={**(entities or {}), "_allow_out_of_stock": True},
+        )
 
     result = ranked[:limit]
     if result:
@@ -351,7 +399,7 @@ async def _cached_all_shopify_products(db: Session) -> list[dict]:
     if not connection:
         return []
 
-    cache_key = f"shopify:products:all:v1:{connection.id}"
+    cache_key = f"shopify:products:all:v2:{connection.id}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
@@ -364,6 +412,90 @@ async def _cached_all_shopify_products(db: Session) -> list[dict]:
     products = [_product_result(_normalize_product(connection, product)) for product in raw_products]
     await _redis_set_json(cache_key, products, settings.shopify_product_cache_ttl_seconds)
     return products
+
+
+async def _cached_shopify_collection_categories(db: Session) -> list[dict]:
+    connection = _active_shopify_connection(db)
+    if not connection or connection.platform != "shopify":
+        return []
+
+    cache_key = f"shopify:collections:v1:{connection.id}"
+    cached = await _redis_get_json(cache_key)
+    if isinstance(cached, list):
+        return cached
+
+    index = await _shopify_collection_index(db)
+    categories = [
+        {
+            "id": f"catalog:category:collection_{item['slug']}",
+            "title": item["title"][:24],
+            "description": f"{len(item['product_ids'])} products",
+        }
+        for item in index
+        if item.get("product_ids")
+    ]
+    await _redis_set_json(cache_key, categories, settings.shopify_query_cache_ttl_seconds)
+    return categories
+
+
+async def _cached_shopify_collection_products(db: Session, category_key: str) -> list[dict]:
+    if not category_key.startswith("collection_"):
+        return []
+    slug = category_key.removeprefix("collection_")
+    index = await _shopify_collection_index(db)
+    collection = next((item for item in index if item.get("slug") == slug), None)
+    if not collection:
+        return []
+
+    products = await _cached_all_shopify_products(db)
+    product_by_id = {
+        str(product.get("shopify_product_id") or product.get("external_id") or ""): product
+        for product in products
+    }
+    return [
+        product_by_id[product_id]
+        for product_id in collection.get("product_ids", [])
+        if product_id in product_by_id
+    ]
+
+
+async def _shopify_collection_index(db: Session) -> list[dict]:
+    connection = _active_shopify_connection(db)
+    if not connection or connection.platform != "shopify":
+        return []
+
+    cache_key = f"shopify:collection-index:v1:{connection.id}"
+    cached = await _redis_get_json(cache_key)
+    if isinstance(cached, list):
+        return cached
+
+    try:
+        collections, collects = await run_in_threadpool(_fetch_shopify_collection_payload, connection)
+    except Exception:
+        return []
+
+    products_by_collection: dict[str, list[str]] = defaultdict(list)
+    for collect in collects:
+        collection_id = str(collect.get("collection_id") or "")
+        product_id = str(collect.get("product_id") or "")
+        if collection_id and product_id:
+            products_by_collection[collection_id].append(product_id)
+
+    index = []
+    for collection in collections:
+        title = str(collection.get("title") or "").strip()
+        slug = _category_slug(collection.get("handle") or title)
+        product_ids = products_by_collection.get(str(collection.get("id") or ""), [])
+        if title and slug and product_ids and _is_clean_category_label(title, set()):
+            index.append({"slug": slug, "title": title, "product_ids": product_ids})
+
+    index.sort(key=lambda item: len(item["product_ids"]), reverse=True)
+    await _redis_set_json(cache_key, index, settings.shopify_query_cache_ttl_seconds)
+    return index
+
+
+def _fetch_shopify_collection_payload(connection: EcommerceConnection) -> tuple[list[dict], list[dict]]:
+    return fetch_shopify_collections(connection, 250), fetch_shopify_collects(connection, PRODUCT_CATALOG_CACHE_LIMIT)
 
 
 async def _cached_shopify_orders(db: Session) -> list[dict]:
@@ -625,6 +757,117 @@ def _top_selling_from_orders(orders: list[dict], products: list[dict], limit: in
     return ranked
 
 
+async def _frequently_bought_together_products(
+    db: Session,
+    base_products: list[dict],
+    products: list[dict],
+    limit: int,
+) -> list[dict]:
+    connection = _active_shopify_connection(db)
+    if not connection:
+        return []
+
+    cache_key = f"shopify:fbt:v1:{connection.id}"
+    index = await _redis_get_json(cache_key)
+    if not isinstance(index, dict):
+        orders = await _cached_shopify_sales_orders(db)
+        index = _frequently_bought_together_index(orders)
+        if index:
+            await _redis_set_json(cache_key, index, settings.shopify_query_cache_ttl_seconds)
+    if not index:
+        return []
+
+    product_lookup = _product_lookup(products)
+    excluded_keys = _product_identity_keys(base_products)
+    related_counts: Counter[str] = Counter()
+    for key in _product_identity_keys(base_products):
+        for related_key, count in (index.get(key) or {}).items():
+            if related_key not in excluded_keys:
+                related_counts[related_key] += int(count or 0)
+
+    ranked = []
+    seen_ids = set()
+    for related_key, sales_count in related_counts.most_common():
+        product = product_lookup.get(related_key)
+        if not product:
+            continue
+        stable_id = str(product.get("shopify_product_id") or product.get("external_id") or product.get("title") or related_key)
+        if stable_id in seen_ids:
+            continue
+        seen_ids.add(stable_id)
+        if product.get("in_stock") is False:
+            continue
+        result = dict(product)
+        result["fbt_count"] = sales_count
+        ranked.append(result)
+        if len(ranked) >= limit:
+            break
+    return ranked
+
+
+def _frequently_bought_together_index(orders: list[dict]) -> dict:
+    pairs: dict[str, Counter[str]] = defaultdict(Counter)
+    for order in orders:
+        item_keys = []
+        for item in order.get("items") or []:
+            keys = _line_item_identity_keys(item)
+            if keys:
+                item_keys.append(keys)
+        if len(item_keys) < 2:
+            continue
+        for index, keys in enumerate(item_keys):
+            related_key_sets = item_keys[:index] + item_keys[index + 1 :]
+            for key in keys:
+                for related_keys in related_key_sets:
+                    for related_key in related_keys:
+                        if related_key != key:
+                            pairs[key][related_key] += 1
+    return {key: dict(counter.most_common(20)) for key, counter in pairs.items() if counter}
+
+
+def _line_item_identity_keys(item: dict) -> set[str]:
+    keys = set()
+    product_id = str(item.get("product_id") or "").strip()
+    sku = str(item.get("sku") or "").strip().lower()
+    name = str(item.get("name") or "").strip().lower()
+    if product_id:
+        keys.add(f"id:{product_id}")
+    if sku:
+        keys.add(f"sku:{sku}")
+    if name:
+        keys.add(f"title:{name}")
+    return keys
+
+
+def _product_identity_keys(products: list[dict]) -> set[str]:
+    keys = set()
+    for product in products:
+        product_id = str(product.get("shopify_product_id") or product.get("external_id") or "").strip()
+        sku_values = []
+        if product.get("sku"):
+            sku_values.extend(str(product["sku"]).split(","))
+        for sku in product.get("skus") or []:
+            sku_values.append(str(sku))
+        title = str(product.get("title") or "").strip().lower()
+        if product_id:
+            keys.add(f"id:{product_id}")
+        for sku in sku_values:
+            clean_sku = sku.strip().lower()
+            if clean_sku:
+                keys.add(f"sku:{clean_sku}")
+        if title:
+            keys.add(f"title:{title}")
+    return keys
+
+
+def _product_lookup(products: list[dict]) -> dict[str, dict]:
+    lookup = {}
+    for product in products:
+        for key in _product_identity_keys([product]):
+            lookup.setdefault(key, product)
+    return lookup
+
+
 def _quantity(value) -> int:
     try:
         return max(0, int(float(value or 0)))
@@ -664,6 +907,9 @@ def _product_result(product: dict) -> dict:
         "external_id": product.get("external_id"),
         "shopify_product_id": product.get("shopify_product_id"),
         "retailer_id": _first_retailer_id(product),
+        "in_stock": product.get("in_stock"),
+        "stock_quantity": product.get("stock_quantity"),
+        "availability_label": product.get("availability_label"),
     }
 
 
@@ -680,6 +926,8 @@ def _product_caption(product: dict, image_urls: list[str]) -> str:
     price = _price_range(product)
     if price:
         parts.append(f"Price: {price}")
+    if product.get("availability_label"):
+        parts.append(str(product["availability_label"]))
     if product.get("product_url"):
         parts.append(str(product["product_url"]))
     elif image_urls:
@@ -699,10 +947,109 @@ def _first_retailer_id(product: dict) -> str | None:
     return product.get("external_id") or product.get("shopify_product_id")
 
 
-def _query_cache_key(query: str, limit: int, require_image: bool, allow_fallback: bool) -> str:
+def _structured_search_text(query: str, entities: dict | None) -> str:
+    parts = [query or ""]
+    if not isinstance(entities, dict):
+        return " ".join(parts)
+    for key in ("product_type", "category", "brand", "color", "size", "material", "use_case"):
+        value = entities.get(key)
+        if value:
+            parts.append(str(value))
+    attributes = entities.get("attributes")
+    if isinstance(attributes, list):
+        parts.extend(str(value) for value in attributes if value)
+    elif attributes:
+        parts.append(str(attributes))
+    return " ".join(parts)
+
+
+def _structured_entity_score(product: dict, entities: dict | None) -> float:
+    if not isinstance(entities, dict):
+        return 0.0
+    score = 0.0
+    weighted_fields = {
+        "product_type": 2.0,
+        "category": 1.5,
+        "brand": 1.2,
+        "color": 1.0,
+        "size": 0.8,
+        "material": 1.0,
+        "use_case": 1.0,
+    }
+    product_text = product_search_text(product)
+    for key, weight in weighted_fields.items():
+        value = entities.get(key)
+        if not value:
+            continue
+        score += score_search_text(search_terms(str(value)), product_text) * weight
+
+    attributes = entities.get("attributes")
+    if isinstance(attributes, list):
+        attribute_text = " ".join(str(value) for value in attributes if value)
+    else:
+        attribute_text = str(attributes or "")
+    if attribute_text:
+        score += score_search_text(search_terms(attribute_text), product_text)
+    return score
+
+
+def _hide_out_of_stock(query: str, entities: dict | None) -> bool:
+    if isinstance(entities, dict) and entities.get("_allow_out_of_stock"):
+        return False
+    text = " ".join([query or "", json.dumps(entities or {}, ensure_ascii=True)]).lower()
+    if any(term in text for term in ("out of stock", "sold out", "unavailable")):
+        return False
+    return True
+
+
+def _inventory_score(product: dict) -> float:
+    if product.get("in_stock") is False:
+        return -5.0
+    score = 1.0 if product.get("in_stock") else 0.0
+    quantity = product.get("stock_quantity")
+    if isinstance(quantity, (int, float)) and quantity > 0:
+        score += min(float(quantity), 25.0) / 25.0
+    return score
+
+
+def _budget_max(query: str, entities: dict | None) -> float | None:
+    if isinstance(entities, dict):
+        for key in ("budget_max", "max_price", "price_max", "budget"):
+            value = entities.get(key)
+            parsed = _price_number(value)
+            if parsed:
+                return parsed
+    budget_match = re.search(
+        r"(?:under|below|less than|upto|up to|budget|andar|neeche|kam|<=?)\s*(?:rs\.?|inr|₹)?\s*([\d,]+)",
+        query or "",
+        re.I,
+    )
+    return _price_number(budget_match.group(1)) if budget_match else None
+
+
+def _product_price_number(product: dict) -> float | None:
+    return _price_number(product.get("price_min") or product.get("price") or product.get("price_max"))
+
+
+def _price_number(value) -> float | None:
+    if value is None:
+        return None
+    match = re.search(r"[\d,.]+", str(value))
+    if not match:
+        return None
+    try:
+        return float(match.group(0).replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _query_cache_key(query: str, limit: int, require_image: bool, allow_fallback: bool, entities: dict | None = None) -> str:
     normalized = " ".join((query or "").lower().split())[:180]
+    entity_part = ""
+    if isinstance(entities, dict) and entities:
+        entity_part = json.dumps(entities, sort_keys=True, ensure_ascii=True)[:240]
     flags = f"limit:{limit}:image:{int(require_image)}:fallback:{int(allow_fallback)}"
-    return f"shopify:query:v1:{flags}:{normalized}"
+    return f"shopify:query:v2:{flags}:{normalized}:{entity_part}"
 
 
 async def _redis_get_json(key: str):

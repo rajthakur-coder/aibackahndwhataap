@@ -15,6 +15,7 @@ from app.models.crm import (
     Lead,
     OrderStatus,
 )
+from app.models.ecommerce import EcommerceOrder
 from app.models.whatsapp import Message
 
 
@@ -279,6 +280,76 @@ def _remember_customer(
     db.commit()
 
 
+def _phone_lookup_values(phone: str) -> list[str]:
+    raw = (phone or "").strip()
+    digits = re.sub(r"\D+", "", raw)
+    values = [raw]
+    if digits:
+        values.extend([digits, f"+{digits}"])
+        if len(digits) > 10:
+            values.append(digits[-10:])
+            values.append(f"+{digits[-10:]}")
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _load_order_items(order: EcommerceOrder) -> list[dict]:
+    if not order.items:
+        return []
+    try:
+        items = json.loads(order.items)
+    except json.JSONDecodeError:
+        return []
+    return items if isinstance(items, list) else []
+
+
+def _latest_ecommerce_orders(db: Session, phone: str) -> list[EcommerceOrder]:
+    values = _phone_lookup_values(phone)
+    if not values:
+        return []
+    return db.execute(
+        select(EcommerceOrder)
+        .where(EcommerceOrder.phone.in_(values))
+        .order_by(EcommerceOrder.updated_at.desc())
+        .limit(3)
+    ).scalars().all()
+
+
+def _ecommerce_order_context(orders: list[EcommerceOrder]) -> str:
+    if not orders:
+        return ""
+
+    lines = []
+    purchased_items = []
+    for order in orders:
+        items = _load_order_items(order)
+        item_names = [
+            str(item.get("name") or item.get("title") or "").strip()
+            for item in items
+            if isinstance(item, dict) and (item.get("name") or item.get("title"))
+        ][:3]
+        purchased_items.extend(item_names)
+        status = order.fulfillment_status or order.status or "unknown"
+        total = " ".join(filter(None, [order.total, order.currency])).strip() or "unknown"
+        tracking = order.tracking_number or order.courier_company or ""
+        line = f"{order.order_number}: status={status}, total={total}"
+        if item_names:
+            line += f", items={', '.join(item_names)}"
+        if tracking:
+            line += f", tracking={tracking}"
+        lines.append(line)
+
+    preference_bits = []
+    if purchased_items:
+        preference_bits.append("previously_bought=" + ", ".join(dict.fromkeys(purchased_items[:6])))
+
+    return "\n".join(
+        [
+            "Latest ecommerce orders: " + " | ".join(lines),
+            "Ecommerce personalization hints: " + "; ".join(preference_bits),
+        ]
+    ).strip()
+
+
 def get_customer_context(db: Session, phone: str) -> str:
     profile = db.execute(
         select(CustomerProfile).where(CustomerProfile.phone == phone)
@@ -311,6 +382,9 @@ def get_customer_context(db: Session, phone: str) -> str:
     if memories:
         memory_text = "; ".join(f"{memory.memory_type}: {memory.content}" for memory in memories)
         parts.append(f"Customer memory: {memory_text}")
+    ecommerce_context = _ecommerce_order_context(_latest_ecommerce_orders(db, phone))
+    if ecommerce_context:
+        parts.append(ecommerce_context)
 
     return "\n".join(parts)
 
@@ -376,8 +450,8 @@ def process_agent_message(db: Session, phone: str, message: str) -> dict:
             payload={"ticket_id": ticket.id, "reason": ticket.reason},
         )
         reply_override = (
-            f"I have created a human support ticket #{ticket.id}. "
-            "Our team will review this conversation and contact you."
+            f"I am connecting you with our support team. Your ticket ID is #{ticket.id}. "
+            "I will pause automated replies while this ticket is open."
         )
         action_results.append({"handoff_ticket_id": ticket.id})
 

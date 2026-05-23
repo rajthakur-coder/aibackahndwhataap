@@ -472,6 +472,46 @@ def fetch_all_products(connection: EcommerceConnection, limit: int = 5000) -> li
     return products[:limit]
 
 
+def fetch_shopify_collections(connection: EcommerceConnection, limit: int = 250) -> list[dict]:
+    if connection.platform != "shopify":
+        return []
+
+    limit = max(1, min(limit, 250))
+    collections = []
+    for path in ("/custom_collections.json", "/smart_collections.json"):
+        page_info = None
+        while len(collections) < limit:
+            params = {"limit": min(250, limit - len(collections)), "fields": "id,title,handle,updated_at,published_at"}
+            if page_info:
+                params = {"limit": min(250, limit - len(collections)), "page_info": page_info}
+            response = _shopify_request("GET", connection, path, params=params)
+            key = "custom_collections" if path.startswith("/custom") else "smart_collections"
+            collections.extend(response.json().get(key, []))
+            page_info = _next_page_info(response)
+            if not page_info:
+                break
+    return collections[:limit]
+
+
+def fetch_shopify_collects(connection: EcommerceConnection, limit: int = 5000) -> list[dict]:
+    if connection.platform != "shopify":
+        return []
+
+    limit = max(1, min(limit, 5000))
+    collects = []
+    page_info = None
+    while len(collects) < limit:
+        params = {"limit": min(250, limit - len(collects)), "fields": "id,collection_id,product_id,featured,position,updated_at"}
+        if page_info:
+            params = {"limit": min(250, limit - len(collects)), "page_info": page_info}
+        response = _shopify_request("GET", connection, "/collects.json", params=params)
+        collects.extend(response.json().get("collects", []))
+        page_info = _next_page_info(response)
+        if not page_info:
+            break
+    return collects[:limit]
+
+
 def fetch_products(connection: EcommerceConnection, limit: int = 100) -> list[dict]:
     limit = max(1, min(limit, 250))
     if connection.platform == "shopify":
@@ -621,6 +661,13 @@ def _normalize_shopify_product(connection: EcommerceConnection, product: dict) -
         for variant in variants
         if variant.get("inventory_quantity") is not None
     ]
+    inventory_quantities = [
+        int(variant.get("inventory_quantity"))
+        for variant in variants
+        if isinstance(variant.get("inventory_quantity"), int)
+    ]
+    stock_quantity = sum(quantity for quantity in inventory_quantities if quantity > 0)
+    in_stock = any(_shopify_variant_available(variant) for variant in variants) if variants else product.get("status") == "active"
     handle = product.get("handle")
     return {
         "external_id": str(product.get("id")),
@@ -645,12 +692,26 @@ def _normalize_shopify_product(connection: EcommerceConnection, product: dict) -
         "sku": ", ".join(skus[:10]) if skus else None,
         "skus": skus,
         "inventory": ", ".join(inventory_values[:20]) if inventory_values else None,
+        "in_stock": in_stock,
+        "stock_quantity": stock_quantity if inventory_quantities else None,
+        "availability_label": "In stock" if in_stock else "Out of stock",
         "variants": variants,
         "options": product.get("options") or [],
         "seo_title": product.get("seo_title") or product.get("title"),
         "seo_description": product.get("seo_description"),
         "image_urls": [image.get("src") for image in images if image.get("src")],
     }
+
+
+def _shopify_variant_available(variant: dict) -> bool:
+    if not variant:
+        return False
+    if variant.get("inventory_policy") == "continue":
+        return True
+    quantity = variant.get("inventory_quantity")
+    if isinstance(quantity, int):
+        return quantity > 0
+    return bool(variant.get("available") or variant.get("requires_shipping") is False)
 
 
 def _normalize_woocommerce_product(connection: EcommerceConnection, product: dict) -> dict:
@@ -688,6 +749,9 @@ def _normalize_woocommerce_product(connection: EcommerceConnection, product: dic
         "sku": product.get("sku"),
         "skus": [product.get("sku")] if product.get("sku") else [],
         "inventory": str(product.get("stock_quantity")) if product.get("stock_quantity") is not None else product.get("stock_status"),
+        "in_stock": product.get("stock_status") in {None, "instock", "onbackorder"} or bool(product.get("in_stock")),
+        "stock_quantity": product.get("stock_quantity"),
+        "availability_label": "In stock" if product.get("stock_status") in {None, "instock", "onbackorder"} or bool(product.get("in_stock")) else "Out of stock",
         "variants": variations[:20],
         "options": product.get("attributes") or [],
         "seo_title": product.get("name"),

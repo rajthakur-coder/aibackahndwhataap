@@ -41,8 +41,8 @@ class Settings(BaseSettings):
     ecommerce_auto_sync_products_enabled: bool = True
     ecommerce_auto_sync_product_limit: int = 100
     shopify_webhook_automation_enabled: bool = False
-    shopify_product_cache_ttl_seconds: int = 300
-    shopify_query_cache_ttl_seconds: int = 300
+    shopify_product_cache_ttl_seconds: int = 3600
+    shopify_query_cache_ttl_seconds: int = 3600
     shopify_order_cache_ttl_seconds: int = 60
     automation_processor_enabled: bool = True
     automation_processor_interval_seconds: int = 60

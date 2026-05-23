@@ -89,7 +89,9 @@ def _llm_understanding(message: str) -> QueryUnderstanding | None:
                             "catalog_request, image_request, price_question, policy_question, "
                             "faq_question, service_request, general. Allowed tools: get_order_status, "
                             "search_products, get_customer_profile, get_policy_or_faq, get_services, "
-                            "search_knowledge, general_reply."
+                            "search_knowledge, general_reply. For product searches, entities may include "
+                            "product_type, category, budget_max, color, size, material, use_case, "
+                            "attributes as a list, brand, and limit."
                         ),
                     },
                     {"role": "user", "content": message},
