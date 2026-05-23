@@ -181,6 +181,10 @@ async def patch_ecommerce_connection(
                 consumer_secret=data.consumer_secret,
                 status=data.status,
             )
+            if data.bot_enabled is not None:
+                connection.bot_enabled = _db_bool(data.bot_enabled)
+                sync_db.commit()
+                sync_db.refresh(connection)
             return {"status": "success", "connection": serialize_ecommerce_connection(connection)}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

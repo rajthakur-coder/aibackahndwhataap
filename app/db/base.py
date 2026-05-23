@@ -6,6 +6,7 @@ from app.models.automation import MessageTemplate
 from app.models.contact import Contact, ContactTag, Tag
 from app.models.crm import AgentAction
 from app.models.crm import Appointment
+from app.models.crm import BotSettings
 from app.models.crm import CustomerMemory
 from app.models.crm import CustomerProfile
 from app.models.crm import HandoffTicket

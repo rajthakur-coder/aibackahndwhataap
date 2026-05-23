@@ -9,6 +9,7 @@ from app.modules.ai.core.intelligence_service import detect_query_intent
 from app.models.crm import (
     AgentAction,
     Appointment,
+    BotSettings,
     CustomerMemory,
     CustomerProfile,
     HandoffTicket,
@@ -160,6 +161,48 @@ def _get_or_create_profile(db: Session, phone: str) -> CustomerProfile:
     db.commit()
     db.refresh(profile)
     return profile
+
+
+def _load_json_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return [str(item).strip().lower() for item in data if str(item).strip()] if isinstance(data, list) else []
+
+
+def get_bot_settings(db: Session) -> BotSettings:
+    row = db.execute(select(BotSettings).where(BotSettings.tenant_id == "default")).scalars().first()
+    if row:
+        return row
+    row = BotSettings(
+        tenant_id="default",
+        handoff_keywords=json.dumps(["human", "agent", "support", "complaint", "manager"], ensure_ascii=True),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def bot_setting_enabled(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _matched_handoff_keyword(message: str, keywords: set[str]) -> str | None:
+    normalized = " ".join((message or "").lower().split())
+    words = _words(message)
+    for keyword in sorted(keywords, key=len, reverse=True):
+        clean = " ".join(keyword.lower().split())
+        if not clean:
+            continue
+        if " " in clean and clean in normalized:
+            return clean
+        if clean in words:
+            return clean
+    return None
 
 
 def _log_action(
@@ -391,6 +434,11 @@ def get_customer_context(db: Session, phone: str) -> str:
 
 def process_agent_message(db: Session, phone: str, message: str) -> dict:
     intent = detect_intent(message)
+    bot_settings = get_bot_settings(db)
+    custom_handoff_keywords = set(_load_json_list(bot_settings.handoff_keywords))
+    matched_handoff_keyword = _matched_handoff_keyword(message, custom_handoff_keywords)
+    if matched_handoff_keyword:
+        intent = "human_handoff"
     query_intent = detect_query_intent(message)
     name = _extract_name(message)
     email = _extract_email(message)
@@ -442,12 +490,13 @@ def process_agent_message(db: Session, phone: str, message: str) -> dict:
             reply_override = "Please share your order ID so I can check the status."
 
     if intent == "human_handoff":
-        ticket = _open_handoff(db, phone, "customer_requested_human")
+        handoff_reason = f"matched_keyword:{matched_handoff_keyword}" if matched_handoff_keyword else "customer_requested_human"
+        ticket = _open_handoff(db, phone, handoff_reason)
         _log_action(
             db,
             "human_handoff",
             phone=phone,
-            payload={"ticket_id": ticket.id, "reason": ticket.reason},
+            payload={"ticket_id": ticket.id, "reason": ticket.reason, "matched_keyword": matched_handoff_keyword},
         )
         reply_override = (
             f"I am connecting you with our support team. Your ticket ID is #{ticket.id}. "

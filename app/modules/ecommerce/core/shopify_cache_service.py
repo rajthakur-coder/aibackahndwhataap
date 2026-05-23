@@ -485,11 +485,11 @@ async def _shopify_collection_index(db: Session) -> list[dict]:
         if collection_id and product_id:
             products_by_collection[collection_id].append(product_id)
 
-    visible_collection_ids = _visible_shopify_collection_ids(db, connection.id)
+    selected_collections = _selected_shopify_collections(db, connection.id)
     index = []
     for collection in collections:
         collection_id = str(collection.get("id") or "")
-        if visible_collection_ids is not None and collection_id not in visible_collection_ids:
+        if selected_collections is not None and collection_id not in selected_collections:
             continue
         title = str(collection.get("title") or "").strip()
         slug = _category_slug(collection.get("handle") or title)
@@ -501,10 +501,14 @@ async def _shopify_collection_index(db: Session) -> list[dict]:
                     "slug": slug,
                     "title": title,
                     "product_ids": product_ids,
+                    "sort_order": selected_collections.get(collection_id, 0) if selected_collections else 0,
                 }
             )
 
-    index.sort(key=lambda item: len(item["product_ids"]), reverse=True)
+    if selected_collections is not None:
+        index.sort(key=lambda item: (int(item.get("sort_order") or 0), item["title"].lower()))
+    else:
+        index.sort(key=lambda item: len(item["product_ids"]), reverse=True)
     await _redis_set_json(cache_key, index, settings.shopify_query_cache_ttl_seconds)
     return index
 
@@ -513,7 +517,7 @@ def _fetch_shopify_collection_payload(connection: EcommerceConnection) -> tuple[
     return fetch_shopify_collections(connection, 250), fetch_shopify_collects(connection, PRODUCT_CATALOG_CACHE_LIMIT)
 
 
-def _visible_shopify_collection_ids(db: Session, connection_id: int) -> set[str] | None:
+def _selected_shopify_collections(db: Session, connection_id: int) -> dict[str, int] | None:
     rows = db.execute(
         select(ShopifyCatalogCollection).where(
             ShopifyCatalogCollection.connection_id == connection_id
@@ -522,7 +526,7 @@ def _visible_shopify_collection_ids(db: Session, connection_id: int) -> set[str]
     if not rows:
         return None
     return {
-        str(row.shopify_collection_id)
+        str(row.shopify_collection_id): int(row.sort_order or 0)
         for row in rows
         if str(row.visible or "").strip().lower() in {"1", "true", "yes", "on"}
     }

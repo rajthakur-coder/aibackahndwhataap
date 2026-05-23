@@ -18,6 +18,7 @@ def serialize_ecommerce_connection(connection: EcommerceConnection) -> dict:
         "owner_phone": connection.owner_phone,
         "plan_name": connection.plan_name,
         "webhook_status": connection.webhook_status,
+        "bot_enabled": str(connection.bot_enabled or "true").strip().lower() in {"1", "true", "yes", "on"},
         "status": connection.status,
         "has_access_token": bool(connection.access_token),
         "has_encrypted_access_token": bool(connection.encrypted_access_token),

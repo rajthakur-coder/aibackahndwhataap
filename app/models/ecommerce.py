@@ -27,6 +27,7 @@ class EcommerceConnection(TimestampMixin, Base):
     owner_phone = Column(String, nullable=True)
     plan_name = Column(String, nullable=True)
     webhook_status = Column(String, default="pending", index=True)
+    bot_enabled = Column(String, default="true", index=True)
     status = Column(String, default="active")
     installed_at = Column(DateTime, default=datetime.utcnow)
     last_sync_at = Column(DateTime, nullable=True)

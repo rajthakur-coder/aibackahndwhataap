@@ -1,14 +1,16 @@
 import json
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.models.crm import AgentAction, HandoffTicket
+from app.models.ecommerce import EcommerceConnection
 from app.models.whatsapp import WebhookEvent
-from app.modules.crm.core.crm_agent_service import process_agent_message
+from app.modules.crm.core.crm_agent_service import bot_setting_enabled, get_bot_settings, process_agent_message
 from app.modules.ai.core.ai_tools_service import ToolDecision, decide_tool_for_message, run_ai_tool
 from app.modules.crm.core.conversation_memory_service import remember_last_products, remember_last_question
 from app.modules.whatsapp.core.messages_service import save_message
@@ -211,11 +213,37 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         )
         remember_last_question(db, phone, text)
 
+    bot_settings = get_bot_settings(db)
+    if not bot_setting_enabled(bot_settings.bot_enabled):
+        db.add(
+            AgentAction(
+                phone=phone,
+                action_type="bot_disabled_auto_reply_skipped",
+                status="skipped",
+                payload=json.dumps({"message": text}),
+            )
+        )
+        db.commit()
+        _mark_processed(db, event)
+        return
+    if not _active_store_bot_enabled(db):
+        db.add(
+            AgentAction(
+                phone=phone,
+                action_type="store_bot_disabled_auto_reply_skipped",
+                status="skipped",
+                payload=json.dumps({"message": text}),
+            )
+        )
+        db.commit()
+        _mark_processed(db, event)
+        return
+
     active_handoff = _active_handoff_ticket(db, phone)
     if active_handoff:
         _append_handoff_summary(db, active_handoff, "incoming", text)
         handoff_text = _localized(
-            _reply_language(text),
+            _reply_language(text, bot_settings),
             f"Your request is already with our support team. Ticket #{active_handoff.id} is open, and they will reply shortly.",
             f"Aapki request support team ke paas hai. Ticket #{active_handoff.id} open hai, team jaldi reply karegi.",
         )
@@ -256,14 +284,22 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
     db.commit()
 
     agent_state = process_agent_message(db, phone, query_text)
+    if agent_state["intent"] == "human_handoff" and not _within_business_hours(bot_settings):
+        offline_text = bot_settings.offline_message or (
+            "Our support team is offline right now. Your request is noted and the team will reply during business hours."
+        )
+        await run_in_threadpool(send_whatsapp_message, phone, offline_text)
+        save_message(db, phone, offline_text, "outgoing")
+        _mark_processed(db, event)
+        return
     if agent_state["intent"] == "order_status":
         shopify_order_reply = await find_cached_shopify_order_status(db, phone, query_text)
         if shopify_order_reply:
             agent_state["reply_override"] = shopify_order_reply
     requested_limit = _requested_limit_from_understanding(understanding, query_text)
-    reply_language = _reply_language(query_text)
+    reply_language = _reply_language(query_text, bot_settings)
     if understanding.intent in {"greeting", "menu_request"} or _is_main_menu_request(query_text):
-        menu_sent = await _try_send_main_menu(phone, reply_language)
+        menu_sent = await _try_send_main_menu(phone, reply_language, bot_settings)
         if menu_sent:
             save_message(db, phone, "[buttons] Main menu", "outgoing")
             _mark_processed(db, event)
@@ -661,13 +697,28 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
             )
         )
         db.commit()
-        ai_reply = generate_ai_reply(
-            db,
-            phone,
-            text,
-            agent_context=_understanding_context(understanding, agent_state["context"]),
-            tool_context=tool_result["context"],
-        )
+        try:
+            ai_reply = generate_ai_reply(
+                db,
+                phone,
+                text,
+                agent_context=_understanding_context(understanding, agent_state["context"]),
+                tool_context=tool_result["context"],
+            )
+        except Exception as exc:
+            db.add(
+                AgentAction(
+                    phone=phone,
+                    action_type="ai_reply_failed_fallback_used",
+                    status="failed",
+                    payload=json.dumps({"message": text}),
+                    result=json.dumps({"error": str(exc)}),
+                )
+            )
+            db.commit()
+            ai_reply = bot_settings.fallback_message or (
+                "I do not have that information right now. I can connect you with our support team."
+            )
     await run_in_threadpool(send_whatsapp_message, phone, ai_reply)
     save_message(db, phone, ai_reply, "outgoing")
     _mark_processed(db, event)
@@ -757,22 +808,67 @@ def _squash_repeated_letters(value: str) -> str:
     return re.sub(r"(.)\1{2,}", r"\1\1", value or "")
 
 
-def _reply_language(query: str) -> str:
+def _active_store_bot_enabled(db: Session) -> bool:
+    connection = db.execute(
+        select(EcommerceConnection)
+        .where(EcommerceConnection.platform == "shopify", EcommerceConnection.status == "active")
+        .order_by(EcommerceConnection.updated_at.desc())
+    ).scalars().first()
+    if not connection:
+        return True
+    return bot_setting_enabled(connection.bot_enabled)
+
+
+def _within_business_hours(bot_settings) -> bool:
+    if not bot_setting_enabled(bot_settings.business_hours_enabled):
+        return True
+    try:
+        now = datetime.now(ZoneInfo(bot_settings.timezone or "Asia/Kolkata"))
+        start_hour, start_minute = [int(part) for part in (bot_settings.business_hours_start or "09:00").split(":", 1)]
+        end_hour, end_minute = [int(part) for part in (bot_settings.business_hours_end or "18:00").split(":", 1)]
+    except Exception:
+        return True
+    current = now.hour * 60 + now.minute
+    start = start_hour * 60 + start_minute
+    end = end_hour * 60 + end_minute
+    if start <= end:
+        return start <= current <= end
+    return current >= start or current <= end
+
+
+def _reply_language(query: str, bot_settings=None) -> str:
+    default_language = str(getattr(bot_settings, "default_language", "auto") or "auto").strip().lower()
+    if default_language in {"english", "hinglish", "hindi"}:
+        return default_language
     terms = _request_terms(query)
     return "hinglish" if terms & HINGLISH_TERMS else "english"
 
 
 def _localized(language: str, english: str, hinglish: str) -> str:
-    return hinglish if language == "hinglish" else english
+    return hinglish if language in {"hinglish", "hindi"} else english
 
 
-async def _try_send_main_menu(phone: str, language: str = "english") -> bool:
+def _main_menu_buttons(bot_settings=None) -> list[dict]:
+    try:
+        buttons = json.loads(getattr(bot_settings, "main_menu_buttons", "") or "[]")
+    except json.JSONDecodeError:
+        buttons = []
+    clean_buttons = [
+        {"id": str(button.get("id") or "").strip(), "title": str(button.get("title") or "").strip()[:20]}
+        for button in buttons
+        if isinstance(button, dict) and button.get("id") and button.get("title")
+    ]
+    return clean_buttons[:3] or MAIN_MENU_BUTTONS
+
+
+async def _try_send_main_menu(phone: str, language: str = "english", bot_settings=None) -> bool:
     try:
         await run_in_threadpool(
             send_whatsapp_reply_buttons,
             phone,
-            _localized(language, "How can I help you?", "Kaise help kar sakte hain?"),
-            MAIN_MENU_BUTTONS,
+            getattr(bot_settings, "welcome_message", None)
+            or _localized(language, "How can I help you?", "Kaise help kar sakte hain?"),
+            _main_menu_buttons(bot_settings),
             "Main menu",
         )
     except Exception:

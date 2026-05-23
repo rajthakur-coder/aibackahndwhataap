@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.models.crm import BotSettings
 from app.models.whatsapp import Message
 
 
@@ -63,7 +64,7 @@ def generate_ai_reply(
         raise RuntimeError("OPENROUTER_API_KEY is not configured")
 
     context = tool_context.strip()
-    reply_language = _reply_language(user_message)
+    reply_language = _reply_language(db, user_message)
 
     system_prompt = (
         "You are an advanced WhatsApp AI agent. Reply clearly and briefly. "
@@ -108,7 +109,15 @@ def generate_ai_reply(
     return reply[:MAX_REPLY_CHARS]
 
 
-def _reply_language(message: str) -> str:
+def _reply_language(db: Session, message: str) -> str:
+    bot_settings = db.execute(select(BotSettings).where(BotSettings.tenant_id == "default")).scalars().first()
+    default_language = str(getattr(bot_settings, "default_language", "auto") or "auto").strip().lower()
+    if default_language == "hindi":
+        return "Hindi"
+    if default_language == "hinglish":
+        return "Hinglish"
+    if default_language == "english":
+        return "English"
     terms = {token.lower() for token in re.findall(r"[a-zA-Z0-9]+", message or "")}
     return "Hinglish" if terms & HINGLISH_TERMS else "English"
 

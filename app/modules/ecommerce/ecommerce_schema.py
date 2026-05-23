@@ -17,6 +17,7 @@ class EcommerceConnectionUpdateRequest(BaseModel):
     consumer_key: str | None = None
     consumer_secret: str | None = None
     status: str | None = None
+    bot_enabled: bool | None = None
 
 
 class EcommerceSyncRequest(BaseModel):

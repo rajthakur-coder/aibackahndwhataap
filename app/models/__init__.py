@@ -9,6 +9,7 @@ from app.models.contact import Contact, ContactTag, Tag
 from app.models.crm import (
     AgentAction,
     Appointment,
+    BotSettings,
     CustomerMemory,
     CustomerProfile,
     HandoffTicket,
@@ -37,6 +38,7 @@ __all__ = [
     "AutomationExecution",
     "AutomationRule",
     "Base",
+    "BotSettings",
     "Contact",
     "ContactTag",
     "Tag",
