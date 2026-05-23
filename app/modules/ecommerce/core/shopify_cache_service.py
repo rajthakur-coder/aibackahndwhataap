@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
-from app.models.ecommerce import EcommerceConnection
+from app.models.ecommerce import EcommerceConnection, ShopifyCatalogCollection
 from app.modules.ai.core.product_search_service import product_search_text, score_search_text, search_terms
 from app.modules.ai.core.sales_recommendations_service import is_sales_recommendation_request
 from app.modules.ecommerce.core.ecommerce_core_service import (
@@ -29,6 +29,10 @@ ORDER_CACHE_LIMIT = 100
 TOP_SELLING_ORDER_LIMIT = 500
 ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*(?:id|number|no))?\s*(?:#|:|-)\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b|\b(?:order|ord|booking|invoice)\s+(?:id|number|no)\s+([A-Za-z0-9][A-Za-z0-9-]{1,})\b|#([A-Za-z0-9][A-Za-z0-9-]{1,})\b", re.I)
 TOKEN_RE = re.compile(r"[a-zA-Z0-9]+")
+NON_CATEGORY_LABEL_RE = re.compile(
+    r"^(?:\d+(?:\.\d+)?\s*%?\s*)?(?:gst|igst|cgst|sgst|vat|tax|taxable|non\s*taxable)(?:\s*\d+(?:\.\d+)?\s*%?)?$",
+    re.I,
+)
 IMAGE_REQUEST_TERMS = {
     "image",
     "images",
@@ -256,7 +260,7 @@ async def find_cached_shopify_catalog_categories(
     limit: int = 24,
 ) -> list[dict]:
     limit = max(1, min(limit, 50))
-    cache_key = f"shopify:categories:v4:limit:{limit}"
+    cache_key = f"shopify:categories:v5:limit:{limit}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
@@ -419,7 +423,7 @@ async def _cached_shopify_collection_categories(db: Session) -> list[dict]:
     if not connection or connection.platform != "shopify":
         return []
 
-    cache_key = f"shopify:collections:v1:{connection.id}"
+    cache_key = f"shopify:collections:v2:{connection.id}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
@@ -464,7 +468,7 @@ async def _shopify_collection_index(db: Session) -> list[dict]:
     if not connection or connection.platform != "shopify":
         return []
 
-    cache_key = f"shopify:collection-index:v1:{connection.id}"
+    cache_key = f"shopify:collection-index:v2:{connection.id}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
@@ -481,13 +485,24 @@ async def _shopify_collection_index(db: Session) -> list[dict]:
         if collection_id and product_id:
             products_by_collection[collection_id].append(product_id)
 
+    visible_collection_ids = _visible_shopify_collection_ids(db, connection.id)
     index = []
     for collection in collections:
+        collection_id = str(collection.get("id") or "")
+        if visible_collection_ids is not None and collection_id not in visible_collection_ids:
+            continue
         title = str(collection.get("title") or "").strip()
         slug = _category_slug(collection.get("handle") or title)
-        product_ids = products_by_collection.get(str(collection.get("id") or ""), [])
+        product_ids = products_by_collection.get(collection_id, [])
         if title and slug and product_ids and _is_clean_category_label(title, set()):
-            index.append({"slug": slug, "title": title, "product_ids": product_ids})
+            index.append(
+                {
+                    "collection_id": collection_id,
+                    "slug": slug,
+                    "title": title,
+                    "product_ids": product_ids,
+                }
+            )
 
     index.sort(key=lambda item: len(item["product_ids"]), reverse=True)
     await _redis_set_json(cache_key, index, settings.shopify_query_cache_ttl_seconds)
@@ -496,6 +511,21 @@ async def _shopify_collection_index(db: Session) -> list[dict]:
 
 def _fetch_shopify_collection_payload(connection: EcommerceConnection) -> tuple[list[dict], list[dict]]:
     return fetch_shopify_collections(connection, 250), fetch_shopify_collects(connection, PRODUCT_CATALOG_CACHE_LIMIT)
+
+
+def _visible_shopify_collection_ids(db: Session, connection_id: int) -> set[str] | None:
+    rows = db.execute(
+        select(ShopifyCatalogCollection).where(
+            ShopifyCatalogCollection.connection_id == connection_id
+        )
+    ).scalars().all()
+    if not rows:
+        return None
+    return {
+        str(row.shopify_collection_id)
+        for row in rows
+        if str(row.visible or "").strip().lower() in {"1", "true", "yes", "on"}
+    }
 
 
 async def _cached_shopify_orders(db: Session) -> list[dict]:
@@ -631,6 +661,10 @@ def _is_clean_category_label(label: str, excluded_labels: set[str]) -> bool:
     if not (2 <= len(label.strip()) <= 24):
         return False
     if normalized in excluded_labels:
+        return False
+    if NON_CATEGORY_LABEL_RE.match(normalized):
+        return False
+    if re.search(r"\b(?:gst|igst|cgst|sgst|vat|tax|taxable)\b", normalized):
         return False
     if normalized.startswith(("all ", "best ")):
         return False

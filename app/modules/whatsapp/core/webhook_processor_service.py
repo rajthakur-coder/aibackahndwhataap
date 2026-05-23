@@ -269,6 +269,18 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
             _mark_processed(db, event)
             return
 
+    if _is_catalog_page_request(query_text):
+        category_list_sent = await _try_send_catalog_category_list(
+            db,
+            phone,
+            reply_language,
+            page=_catalog_page_number(query_text),
+        )
+        if category_list_sent:
+            save_message(db, phone, "[list] Catalog categories", "outgoing")
+            _mark_processed(db, event)
+            return
+
     selected_catalog_category = _selected_catalog_category(query_text)
     if selected_catalog_category:
         category_page = _selected_catalog_product_page(query_text)
@@ -708,6 +720,17 @@ def _understanding_context(understanding, agent_context: str) -> str:
 def _looks_like_catalog_request(query: str) -> bool:
     terms = _request_terms(query)
     return bool(terms & CATALOG_REQUEST_TERMS and terms & REQUEST_ACTION_TERMS)
+
+
+def _is_catalog_page_request(query: str) -> bool:
+    normalized = " ".join((query or "").lower().split())
+    if re.search(r"\bcatalog page \d+\b", normalized):
+        return True
+    terms = _request_terms(normalized)
+    return bool(
+        {"catalog", "categories"} <= terms
+        and terms & {"next", "more", "previous", "back", "show"}
+    )
 
 
 def _looks_like_image_request(query: str) -> bool:

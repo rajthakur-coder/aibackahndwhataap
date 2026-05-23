@@ -15,6 +15,7 @@ from app.models.ecommerce import EcommerceConnection
 from app.models.ecommerce import EcommerceCustomer
 from app.models.ecommerce import EcommerceOrder
 from app.models.ecommerce import EcommerceProduct
+from app.models.ecommerce import ShopifyCatalogCollection
 from app.models.ecommerce import ShopifyWebhookEvent
 from app.models.whatsapp import Message
 from app.models.whatsapp import WebhookEvent

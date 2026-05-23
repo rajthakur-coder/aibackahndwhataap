@@ -11,3 +11,7 @@ class OrderRequest(BaseModel):
 class ActionRequest(BaseModel):
     phone: str
     payload: dict
+
+
+class HandoffResolveRequest(BaseModel):
+    note: str | None = None

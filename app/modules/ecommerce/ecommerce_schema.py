@@ -40,3 +40,13 @@ class AbandonedCartRequest(BaseModel):
     items: list[dict] = Field(default_factory=list)
     external_id: str | None = None
     delay_seconds: int = 0
+
+
+class ShopifyCatalogCollectionSelection(BaseModel):
+    shopify_collection_id: str
+    visible: bool = True
+    sort_order: int = 0
+
+
+class ShopifyCatalogCollectionUpdateRequest(BaseModel):
+    collections: list[ShopifyCatalogCollectionSelection] = Field(default_factory=list)

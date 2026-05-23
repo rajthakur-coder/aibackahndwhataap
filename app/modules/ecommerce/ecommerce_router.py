@@ -2,13 +2,13 @@ import json
 
 import requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import AsyncSessionLocal, get_db
 from app.models.crm import AgentAction
-from app.models.ecommerce import EcommerceConnection
+from app.models.ecommerce import EcommerceConnection, ShopifyCatalogCollection
 from app.modules.automation.automation_service import (
     enqueue_order_automation_events,
     process_automation_event,
@@ -28,12 +28,15 @@ from app.modules.ecommerce.ecommerce_schema import (
     EcommerceConnectionUpdateRequest,
     EcommerceProductSyncRequest,
     EcommerceSyncRequest,
+    ShopifyCatalogCollectionUpdateRequest,
 )
 from app.modules.ecommerce.ecommerce_service import (
     create_connection,
     fetch_fulfillments,
     fetch_order_by_id,
     fetch_locations,
+    fetch_shopify_collections,
+    fetch_shopify_collects,
     find_shopify_connection_by_domain,
     mark_shopify_webhook_event,
     record_shopify_webhook_event,
@@ -47,6 +50,7 @@ from app.modules.ecommerce.ecommerce_service import (
     verify_shopify_hmac,
 )
 from app.modules.ecommerce.core.ecommerce_core_service import bootstrap_shopify_connection
+from app.shared.redis import get_redis
 
 
 ecommerce_router = APIRouter(prefix="/ecommerce", tags=["ecommerce"])
@@ -60,6 +64,55 @@ def _connection_or_404(db: Session, connection_id: int) -> EcommerceConnection:
     if not connection:
         raise HTTPException(status_code=404, detail="Ecommerce connection not found")
     return connection
+
+
+def _db_bool(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def _is_db_true(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _clear_shopify_catalog_cache(connection_id: int) -> None:
+    try:
+        redis = await get_redis()
+        patterns = [
+            f"shopify:collections:*:{connection_id}",
+            f"shopify:collection-index:*:{connection_id}",
+            "shopify:categories:*",
+            "shopify:category:*",
+        ]
+        for pattern in patterns:
+            keys = [key async for key in redis.scan_iter(match=pattern, count=100)]
+            if keys:
+                await redis.delete(*keys)
+    except Exception:
+        return
+
+
+def _shopify_collection_rows(connection: EcommerceConnection) -> list[dict]:
+    collections = fetch_shopify_collections(connection, 250)
+    collects = fetch_shopify_collects(connection, 5000)
+    counts: dict[str, int] = {}
+    for collect in collects:
+        collection_id = str(collect.get("collection_id") or "")
+        if collection_id:
+            counts[collection_id] = counts.get(collection_id, 0) + 1
+    rows = []
+    for collection in collections:
+        collection_id = str(collection.get("id") or "")
+        if not collection_id:
+            continue
+        rows.append(
+            {
+                "shopify_collection_id": collection_id,
+                "title": collection.get("title") or collection.get("handle") or collection_id,
+                "handle": collection.get("handle"),
+                "product_count": counts.get(collection_id, 0),
+            }
+        )
+    return sorted(rows, key=lambda row: (-int(row["product_count"] or 0), str(row["title"]).lower()))
 
 
 async def bootstrap_shopify_connection_background(connection_id: int) -> None:
@@ -242,6 +295,95 @@ async def get_ecommerce_locations(connection_id: int, db: AsyncSession = Depends
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return await db.run_sync(sync_op)
+
+
+@ecommerce_router.get("/connections/{connection_id}/shopify-collections")
+async def get_shopify_catalog_collections(connection_id: int, db: AsyncSession = Depends(get_db)):
+    def sync_op(sync_db: Session):
+        connection = _connection_or_404(sync_db, connection_id)
+        if connection.platform != "shopify":
+            raise HTTPException(status_code=400, detail="Collections are only available for Shopify")
+
+        saved_rows = sync_db.execute(
+            select(ShopifyCatalogCollection).where(
+                ShopifyCatalogCollection.connection_id == connection.id
+            )
+        ).scalars().all()
+        saved_by_id = {str(row.shopify_collection_id): row for row in saved_rows}
+
+        try:
+            collections = _shopify_collection_rows(connection)
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        has_saved_preferences = bool(saved_rows)
+        data = []
+        for index, collection in enumerate(collections):
+            saved = saved_by_id.get(collection["shopify_collection_id"])
+            visible = _is_db_true(saved.visible) if saved else not has_saved_preferences
+            data.append(
+                {
+                    **collection,
+                    "visible": visible,
+                    "sort_order": saved.sort_order if saved else index,
+                }
+            )
+        return {"status": "success", "connection_id": connection.id, "collections": data}
+
+    return await db.run_sync(sync_op)
+
+
+@ecommerce_router.put("/connections/{connection_id}/shopify-collections")
+async def update_shopify_catalog_collections(
+    connection_id: int,
+    data: ShopifyCatalogCollectionUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    def sync_op(sync_db: Session):
+        connection = _connection_or_404(sync_db, connection_id)
+        if connection.platform != "shopify":
+            raise HTTPException(status_code=400, detail="Collections are only available for Shopify")
+
+        try:
+            live_collections = _shopify_collection_rows(connection)
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        live_by_id = {row["shopify_collection_id"]: row for row in live_collections}
+        selected_by_id = {
+            str(row.shopify_collection_id): row
+            for row in data.collections
+            if str(row.shopify_collection_id) in live_by_id
+        }
+
+        sync_db.execute(
+            delete(ShopifyCatalogCollection).where(
+                ShopifyCatalogCollection.connection_id == connection.id
+            )
+        )
+        for fallback_index, (collection_id, selection) in enumerate(selected_by_id.items()):
+            live = live_by_id[collection_id]
+            sync_db.add(
+                ShopifyCatalogCollection(
+                    tenant_id=connection.tenant_id,
+                    connection_id=connection.id,
+                    shopify_collection_id=collection_id,
+                    title=live["title"],
+                    handle=live.get("handle"),
+                    product_count=live.get("product_count") or 0,
+                    visible=_db_bool(selection.visible),
+                    sort_order=selection.sort_order if selection.sort_order is not None else fallback_index,
+                )
+            )
+        sync_db.commit()
+        return {
+            "status": "success",
+            "connection_id": connection.id,
+            "saved": len(selected_by_id),
+        }
+
+    response = await db.run_sync(sync_op)
+    await _clear_shopify_catalog_cache(connection_id)
+    return response
 
 
 @ecommerce_router.get("/connections/{connection_id}/orders/{shopify_order_id}/fulfillments")

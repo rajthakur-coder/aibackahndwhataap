@@ -20,6 +20,7 @@ from app.models.ecommerce import (
     EcommerceCustomer,
     EcommerceOrder,
     EcommerceProduct,
+    ShopifyCatalogCollection,
     ShopifyWebhookEvent,
 )
 from app.models.whatsapp import (
@@ -51,6 +52,7 @@ __all__ = [
     "MessageTemplate",
     "OrderStatus",
     "ShopifyWebhookEvent",
+    "ShopifyCatalogCollection",
     "WebhookEvent",
     "WhatsappCredential",
     "WhatsappTemplate",
