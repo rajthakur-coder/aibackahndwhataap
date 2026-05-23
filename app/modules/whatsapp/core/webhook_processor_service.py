@@ -125,7 +125,15 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
                 elif button_reply:
                     reply_id = str(button_reply.get("id") or "")
                     title = str(button_reply.get("title") or "")
-                    if reply_id == "menu:catalog":
+                    if reply_id.startswith("catalog:more:"):
+                        parts = reply_id.split(":")
+                        category = parts[2] if len(parts) > 2 else ""
+                        page = parts[3] if len(parts) > 3 else "1"
+                        if category in CATALOG_CATEGORY_LABELS:
+                            text = f"catalog category {category} page {page}".strip()
+                        else:
+                            text = f"catalog dynamic category {category} page {page}".strip()
+                    elif reply_id == "menu:catalog":
                         text = "catalog dikhao"
                     elif reply_id == "menu:order_status":
                         text = "track order"
@@ -241,11 +249,27 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
 
     selected_catalog_category = _selected_catalog_category(query_text)
     if selected_catalog_category:
-        category_products = await _products_for_catalog_category(db, selected_catalog_category, requested_limit)
+        category_page = _selected_catalog_product_page(query_text)
+        category_fetch_limit = requested_limit + 1
+        category_offset = (category_page - 1) * requested_limit
+        category_products_page = await _products_for_catalog_category(
+            db,
+            selected_catalog_category,
+            category_fetch_limit,
+            offset=category_offset,
+        )
+        has_more_category_products = (
+            selected_catalog_category != "best_sellers"
+            and len(category_products_page) > requested_limit
+        )
+        category_products = category_products_page[:requested_limit]
         if category_products:
             remember_last_products(db, phone, category_products)
             label_key = selected_catalog_category.removeprefix("dynamic:")
-            label = CATALOG_CATEGORY_LABELS.get(selected_catalog_category, label_key.replace("_", " ").title())
+            label = CATALOG_CATEGORY_LABELS.get(
+                selected_catalog_category,
+                CATALOG_CATEGORY_LABELS.get(label_key, label_key.replace("_", " ").title()),
+            )
             carousel_sent = await _try_send_product_carousel(
                 phone,
                 category_products,
@@ -253,6 +277,14 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
             )
             if carousel_sent:
                 save_message(db, phone, f"[carousel] {label}", "outgoing")
+                if has_more_category_products:
+                    await _try_send_category_more_button(
+                        phone,
+                        selected_catalog_category,
+                        category_page + 1,
+                        label,
+                        reply_language,
+                    )
                 _mark_processed(db, event)
                 return
             product_list_sent = await _try_send_product_list(
@@ -263,6 +295,14 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
             )
             if product_list_sent:
                 save_message(db, phone, f"[product_list] {label}", "outgoing")
+                if has_more_category_products:
+                    await _try_send_category_more_button(
+                        phone,
+                        selected_catalog_category,
+                        category_page + 1,
+                        label,
+                        reply_language,
+                    )
                 _mark_processed(db, event)
                 return
         fallback_text = _localized(
@@ -688,14 +728,54 @@ def _selected_catalog_category(query: str) -> str | None:
     return category if category in CATALOG_CATEGORY_LABELS else None
 
 
-async def _products_for_catalog_category(db: Session, category: str, limit: int) -> list[dict]:
+def _selected_catalog_product_page(query: str) -> int:
+    match = re.search(r"\bpage (\d+)\b", " ".join((query or "").lower().split()))
+    if not match:
+        return 1
+    try:
+        return max(1, int(match.group(1)))
+    except ValueError:
+        return 1
+
+
+async def _products_for_catalog_category(
+    db: Session,
+    category: str,
+    limit: int,
+    offset: int = 0,
+) -> list[dict]:
     if category == "best_sellers":
         return await find_cached_shopify_top_selling_products(db, limit=limit)
     if category == "all":
-        return await find_cached_shopify_category_products(db, "all", limit=limit)
+        return await find_cached_shopify_category_products(db, "all", limit=limit, offset=offset)
     if category.startswith("dynamic:"):
-        return await find_cached_shopify_category_products(db, category.removeprefix("dynamic:"), limit=limit)
-    return await find_cached_shopify_category_products(db, category, limit=limit)
+        return await find_cached_shopify_category_products(
+            db,
+            category.removeprefix("dynamic:"),
+            limit=limit,
+            offset=offset,
+        )
+    return await find_cached_shopify_category_products(db, category, limit=limit, offset=offset)
+
+
+async def _try_send_category_more_button(
+    phone: str,
+    category: str,
+    next_page: int,
+    label: str,
+    language: str,
+) -> bool:
+    category_key = category.removeprefix("dynamic:")
+    try:
+        await run_in_threadpool(
+            send_whatsapp_reply_buttons,
+            phone,
+            _localized(language, f"Do you want to see more {label} products?", f"Aur {label} products dekhne hain?"),
+            [{"id": f"catalog:more:{category_key}:{next_page}", "title": "Show more"}],
+        )
+    except Exception:
+        return False
+    return True
 
 
 def _catalog_page_number(query: str) -> int:

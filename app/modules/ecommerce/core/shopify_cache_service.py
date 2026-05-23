@@ -202,13 +202,15 @@ async def find_cached_shopify_category_products(
     db: Session,
     category: str,
     limit: int = 5,
+    offset: int = 0,
 ) -> list[dict]:
     limit = max(1, min(limit, 10))
+    offset = max(0, offset)
     category_key = " ".join((category or "").lower().split())[:80]
     if not category_key:
         return []
 
-    cache_key = f"shopify:category:v1:{category_key}:limit:{limit}"
+    cache_key = f"shopify:category:v2:{category_key}:limit:{limit}:offset:{offset}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
@@ -218,22 +220,19 @@ async def find_cached_shopify_category_products(
         return []
 
     if category_key in {"all", "all products", "new", "new arrivals"}:
-        result = products[:limit]
+        result = products[offset : offset + limit]
     else:
         query_terms = search_terms(category_key)
         scored = []
         for product in products:
-            haystack = " ".join(
-                str(product.get(key) or "")
-                for key in ("title", "description", "category", "product_type", "tags", "brand", "sku")
-            )
+            haystack = _category_product_haystack(product)
             score = score_search_text(query_terms, haystack)
             if score > 0:
                 scored.append((score, product))
         result = [
             product
             for _score, product in sorted(scored, key=lambda item: item[0], reverse=True)
-        ][:limit]
+        ][offset : offset + limit]
 
     if result:
         await _redis_set_json(cache_key, result, settings.shopify_query_cache_ttl_seconds)
@@ -255,6 +254,7 @@ async def find_cached_shopify_catalog_categories(
         return []
 
     counts: Counter[str] = Counter()
+    exact_counts: Counter[str] = Counter()
     labels: dict[str, str] = {}
     excluded_labels = _store_labels(products)
     for product in products:
@@ -262,8 +262,19 @@ async def find_cached_shopify_catalog_categories(
             slug = _category_slug(label)
             if not slug:
                 continue
-            counts[slug] += 1
+            exact_counts[slug] += 1
             labels.setdefault(slug, label.strip()[:24])
+
+    for slug, label in labels.items():
+        query_terms = search_terms(label)
+        if not query_terms:
+            continue
+        for product in products:
+            if score_search_text(query_terms, _category_product_haystack(product)) > 0:
+                counts[slug] += 1
+
+    for slug, count in exact_counts.items():
+        counts[slug] = max(counts[slug], count)
 
     categories = [
         {
@@ -442,6 +453,13 @@ def is_image_request(query: str) -> bool:
 
 def _tokens(text: str) -> list[str]:
     return [token.lower() for token in TOKEN_RE.findall(text or "") if len(token) > 1]
+
+
+def _category_product_haystack(product: dict) -> str:
+    return " ".join(
+        str(product.get(key) or "")
+        for key in ("title", "description", "category", "product_type", "tags", "brand", "sku")
+    )
 
 
 def _category_labels(product: dict, excluded_labels: set[str] | None = None) -> list[str]:
