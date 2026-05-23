@@ -14,6 +14,8 @@ REQUEST_TIMEOUT = 15
 ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*(?:id|number|no))?\s*(?:#|:|-)\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b|\b(?:order|ord|booking|invoice)\s+(?:id|number|no)\s+([A-Za-z0-9][A-Za-z0-9-]{1,})\b|#([A-Za-z0-9][A-Za-z0-9-]{1,})\b", re.I)
 
 TOOL_BY_INTENT = {
+    "greeting": "general_reply",
+    "menu_request": "general_reply",
     "order_status": "get_order_status",
     "tracking_question": "get_order_status",
     "top_selling_products": "search_products",
@@ -83,7 +85,7 @@ def _llm_understanding(message: str) -> QueryUnderstanding | None:
                             "Normalize this WhatsApp ecommerce message and extract routing data. "
                             "Fix typos and Hinglish, but keep product names and order IDs intact. "
                             "Return only JSON with keys: normalized_query, intent, entities, "
-                            "confidence, tool. Allowed intents: order_status, top_selling_products, "
+                            "confidence, tool. Allowed intents: greeting, menu_request, order_status, top_selling_products, "
                             "catalog_request, image_request, price_question, policy_question, "
                             "faq_question, service_request, general. Allowed tools: get_order_status, "
                             "search_products, get_customer_profile, get_policy_or_faq, get_services, "
@@ -124,13 +126,15 @@ def _rule_understanding(message: str) -> QueryUnderstanding:
     normalized = _normalize_text(message)
     query_intent = detect_query_intent(normalized)
     intent = query_intent.name
-    if is_top_selling_request(normalized):
+    if _looks_like_greeting_or_menu(normalized):
+        intent = "menu_request"
+    elif is_top_selling_request(normalized):
         intent = "top_selling_products"
     elif query_intent.name == "tracking_question":
         intent = "order_status"
 
     confidence = min(0.95, 0.35 + (query_intent.score * 0.15))
-    if intent in {"top_selling_products", "order_status"}:
+    if intent in {"menu_request", "top_selling_products", "order_status"}:
         confidence = max(confidence, 0.75)
 
     return QueryUnderstanding(
@@ -151,6 +155,18 @@ def _normalize_text(message: str) -> str:
         replacement = COMMON_FIXES.get(key)
         tokens.append(replacement if replacement else token)
     return " ".join(tokens).strip()
+
+
+def _looks_like_greeting_or_menu(message: str) -> bool:
+    tokens = [re.sub(r"(.)\1{2,}", r"\1\1", token.lower()) for token in re.findall(r"[a-zA-Z0-9]+", message or "")]
+    if not tokens:
+        return False
+    if any(token in {"menu", "help", "start"} for token in tokens[:4]):
+        return True
+    if tokens[0] in {"hi", "hii", "hello", "hey", "namaste"} and len(tokens) <= 4:
+        intent_words = {"order", "track", "product", "products", "catalog", "price", "image", "status"}
+        return not bool(set(tokens[1:]) & intent_words)
+    return False
 
 
 def _merge_rule_entities(message: str, entities: dict) -> dict:

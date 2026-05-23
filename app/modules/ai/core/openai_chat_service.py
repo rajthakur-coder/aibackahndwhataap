@@ -1,3 +1,5 @@
+import re
+
 import requests
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -9,6 +11,27 @@ from app.models.whatsapp import Message
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = 45
 MAX_REPLY_CHARS = 4096
+HINGLISH_TERMS = {
+    "aap",
+    "abhi",
+    "batao",
+    "bhejo",
+    "chahiye",
+    "chaiye",
+    "dekhna",
+    "dikha",
+    "dikhana",
+    "dikhao",
+    "hai",
+    "hain",
+    "kaise",
+    "karo",
+    "kya",
+    "mera",
+    "mere",
+    "mujhe",
+    "nahi",
+}
 
 
 def _recent_conversation(db: Session, phone: str) -> list[dict]:
@@ -40,9 +63,11 @@ def generate_ai_reply(
         raise RuntimeError("OPENROUTER_API_KEY is not configured")
 
     context = tool_context.strip()
+    reply_language = _reply_language(user_message)
 
     system_prompt = (
         "You are an advanced WhatsApp AI agent. Reply clearly and briefly. "
+        f"Reply in {reply_language}. For neutral greetings like hi or hello, use English unless the user's message has Hindi/Hinglish words. "
         "Use only structured database/tool context when it is provided. "
         "Use customer memory and intent context to personalize the response. "
         "Ask for missing details when an action needs more information. "
@@ -81,4 +106,9 @@ def generate_ai_reply(
     data = response.json()
     reply = data["choices"][0]["message"]["content"].strip()
     return reply[:MAX_REPLY_CHARS]
+
+
+def _reply_language(message: str) -> str:
+    terms = {token.lower() for token in re.findall(r"[a-zA-Z0-9]+", message or "")}
+    return "Hinglish" if terms & HINGLISH_TERMS else "English"
 

@@ -59,6 +59,28 @@ IMAGE_REQUEST_TERMS = {
 }
 CATALOG_REQUEST_TERMS = {"catalog", "catalogue", "products", "product", "collection", "items", "list", "menu"}
 REQUEST_ACTION_TERMS = {"bhejo", "chahiye", "chaiye", "dekhna", "dikha", "dikhana", "dikhao", "send", "show"}
+HINGLISH_TERMS = {
+    "aap",
+    "abhi",
+    "batao",
+    "bhejo",
+    "chahiye",
+    "chaiye",
+    "dekhna",
+    "dikha",
+    "dikhana",
+    "dikhao",
+    "hai",
+    "hain",
+    "kaise",
+    "karo",
+    "kya",
+    "mera",
+    "mere",
+    "mujhe",
+    "nahi",
+    "shai",
+}
 CATALOG_CATEGORY_ROWS = [
     {"id": "catalog:all", "title": "All products", "description": "Browse the full catalog"},
     {"id": "catalog:best_sellers", "title": "Best sellers", "description": "Popular products"},
@@ -67,6 +89,7 @@ CATALOG_CATEGORY_LABELS = {
     "all": "All products",
     "best_sellers": "Best sellers",
 }
+CATALOG_PAGE_SIZE = 8
 MAIN_MENU_BUTTONS = [
     {"id": "menu:catalog", "title": "View catalog"},
     {"id": "menu:order_status", "title": "Track order"},
@@ -91,7 +114,9 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
                 if list_reply:
                     reply_id = str(list_reply.get("id") or "")
                     title = str(list_reply.get("title") or "")
-                    if reply_id.startswith("catalog:category:"):
+                    if reply_id.startswith("catalog:page:"):
+                        text = f"catalog page {reply_id.removeprefix('catalog:page:')}".strip()
+                    elif reply_id.startswith("catalog:category:"):
                         text = f"catalog dynamic category {reply_id.removeprefix('catalog:category:')} {title}".strip()
                     elif reply_id.startswith("catalog:"):
                         text = f"catalog category {reply_id.removeprefix('catalog:')} {title}".strip()
@@ -206,8 +231,9 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         if shopify_order_reply:
             agent_state["reply_override"] = shopify_order_reply
     requested_limit = _requested_limit_from_understanding(understanding, query_text)
-    if _is_main_menu_request(query_text):
-        menu_sent = await _try_send_main_menu(phone)
+    reply_language = _reply_language(query_text)
+    if understanding.intent in {"greeting", "menu_request"} or _is_main_menu_request(query_text):
+        menu_sent = await _try_send_main_menu(phone, reply_language)
         if menu_sent:
             save_message(db, phone, "[buttons] Main menu", "outgoing")
             _mark_processed(db, event)
@@ -223,7 +249,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
             carousel_sent = await _try_send_product_carousel(
                 phone,
                 category_products,
-                f"{label} products dekh sakte hain.",
+                _localized(reply_language, f"You can browse {label} products.", f"{label} products dekh sakte hain."),
             )
             if carousel_sent:
                 save_message(db, phone, f"[carousel] {label}", "outgoing")
@@ -233,20 +259,29 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
                 phone,
                 category_products,
                 label,
-                f"{label} products dekh sakte hain.",
+                _localized(reply_language, f"You can browse {label} products.", f"{label} products dekh sakte hain."),
             )
             if product_list_sent:
                 save_message(db, phone, f"[product_list] {label}", "outgoing")
                 _mark_processed(db, event)
                 return
-        fallback_text = "Is category me abhi products nahi mile. Aap All products try kar sakte hain."
+        fallback_text = _localized(
+            reply_language,
+            "No products found in this category right now. You can try All products.",
+            "Is category me abhi products nahi mile. Aap All products try kar sakte hain.",
+        )
         await run_in_threadpool(send_whatsapp_message, phone, fallback_text)
         save_message(db, phone, fallback_text, "outgoing")
         _mark_processed(db, event)
         return
 
     if _looks_like_catalog_request(query_text):
-        category_list_sent = await _try_send_catalog_category_list(db, phone)
+        category_list_sent = await _try_send_catalog_category_list(
+            db,
+            phone,
+            reply_language,
+            page=_catalog_page_number(query_text),
+        )
         if category_list_sent:
             save_message(db, phone, "[list] Catalog categories", "outgoing")
             _mark_processed(db, event)
@@ -259,7 +294,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
             carousel_sent = await _try_send_product_carousel(
                 phone,
                 top_selling_products,
-                "Ye top-selling products hain.",
+                _localized(reply_language, "These are the top-selling products.", "Ye top-selling products hain."),
             )
             if carousel_sent:
                 save_message(db, phone, "[carousel] Top selling products", "outgoing")
@@ -269,7 +304,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
                 phone,
                 top_selling_products,
                 "Top selling products",
-                "Ye top-selling products hain.",
+                _localized(reply_language, "These are the top-selling products.", "Ye top-selling products hain."),
             )
             if product_list_sent:
                 save_message(db, phone, "[product_list] Top selling products", "outgoing")
@@ -307,7 +342,11 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
                         )
                         db.commit()
         else:
-            recommendation_text = "Abhi top-selling products nikalne ke liye order/sales data available nahi hai."
+            recommendation_text = _localized(
+                reply_language,
+                "Sales data is not available yet to calculate top-selling products.",
+                "Abhi top-selling products nikalne ke liye order/sales data available nahi hai.",
+            )
             await run_in_threadpool(send_whatsapp_message, phone, recommendation_text)
             save_message(db, phone, recommendation_text, "outgoing")
 
@@ -324,7 +363,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         carousel_sent = await _try_send_product_carousel(
             phone,
             recommended_products,
-            "Aapke liye matching products.",
+            _localized(reply_language, "Matching products for you.", "Aapke liye matching products."),
         )
         if carousel_sent:
             save_message(db, phone, "[carousel] Recommended products", "outgoing")
@@ -335,7 +374,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
             phone,
             recommended_products,
             "Recommended products",
-            "Aapke liye matching products.",
+            _localized(reply_language, "Matching products for you.", "Aapke liye matching products."),
         )
         if product_list_sent:
             save_message(db, phone, "[product_list] Recommended products", "outgoing")
@@ -389,7 +428,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         carousel_sent = await _try_send_product_carousel(
             phone,
             catalog_products,
-            "Catalog products dekh sakte hain.",
+            _localized(reply_language, "You can browse these catalog products.", "Catalog products dekh sakte hain."),
         )
         if carousel_sent:
             save_message(db, phone, "[carousel] Catalog", "outgoing")
@@ -400,7 +439,7 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
             phone,
             catalog_products,
             "Catalog",
-            "Catalog products dekh sakte hain.",
+            _localized(reply_language, "You can browse these catalog products.", "Catalog products dekh sakte hain."),
         )
         if product_list_sent:
             save_message(db, phone, "[product_list] Catalog", "outgoing")
@@ -474,9 +513,9 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         product_list_sent = await _try_send_product_list(
             phone,
             [product_image],
-            "Product",
-            "Product detail dekh sakte hain.",
-        )
+                "Product",
+                _localized(reply_language, "You can view this product detail.", "Product detail dekh sakte hain."),
+            )
         if product_list_sent:
             save_message(db, phone, f"[product_list] {product_image['title']}", "outgoing")
             await _send_cross_sell_products(db, phone, query_text, [product_image])
@@ -508,8 +547,12 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
             )
             db.commit()
             fallback_text = (
-                "Image send nahi ho payi, lekin product detail yeh hai:\n"
-                f"{product_image['caption']}"
+                _localized(
+                    reply_language,
+                    "I could not send the image, but here are the product details:\n",
+                    "Image send nahi ho payi, lekin product detail yeh hai:\n",
+                )
+                + f"{product_image['caption']}"
             )
             await run_in_threadpool(send_whatsapp_message, phone, fallback_text)
             save_message(db, phone, fallback_text, "outgoing")
@@ -595,16 +638,36 @@ def _request_terms(query: str) -> set[str]:
 
 
 def _is_main_menu_request(query: str) -> bool:
-    normalized = " ".join((query or "").lower().split())
-    return normalized in GREETING_TERMS
+    tokens = [_squash_repeated_letters(token.lower()) for token in re.findall(r"[a-zA-Z0-9]+", query or "")]
+    if not tokens:
+        return False
+    if any(token in {"menu", "help", "start"} for token in tokens[:4]):
+        return True
+    if tokens[0] not in GREETING_TERMS:
+        return False
+    intent_words = {"order", "track", "product", "products", "catalog", "price", "image", "status"}
+    return len(tokens) <= 4 and not bool(set(tokens[1:]) & intent_words)
 
 
-async def _try_send_main_menu(phone: str) -> bool:
+def _squash_repeated_letters(value: str) -> str:
+    return re.sub(r"(.)\1{2,}", r"\1\1", value or "")
+
+
+def _reply_language(query: str) -> str:
+    terms = _request_terms(query)
+    return "hinglish" if terms & HINGLISH_TERMS else "english"
+
+
+def _localized(language: str, english: str, hinglish: str) -> str:
+    return hinglish if language == "hinglish" else english
+
+
+async def _try_send_main_menu(phone: str, language: str = "english") -> bool:
     try:
         await run_in_threadpool(
             send_whatsapp_reply_buttons,
             phone,
-            "Kaise help kar sakte hain?",
+            _localized(language, "How can I help you?", "Kaise help kar sakte hain?"),
             MAIN_MENU_BUTTONS,
             "Main menu",
         )
@@ -635,21 +698,59 @@ async def _products_for_catalog_category(db: Session, category: str, limit: int)
     return await find_cached_shopify_category_products(db, category, limit=limit)
 
 
-async def _try_send_catalog_category_list(db: Session, phone: str) -> bool:
-    dynamic_rows = await find_cached_shopify_catalog_categories(db, limit=8)
-    rows = list(CATALOG_CATEGORY_ROWS)
-    seen_ids = {row["id"] for row in rows}
-    for row in dynamic_rows:
-        if row.get("id") not in seen_ids:
-            rows.append(row)
-            seen_ids.add(row["id"])
-        if len(rows) >= 10:
-            break
+def _catalog_page_number(query: str) -> int:
+    match = re.search(r"\bcatalog page (\d+)\b", " ".join((query or "").lower().split()))
+    if not match:
+        return 1
+    try:
+        return max(1, int(match.group(1)))
+    except ValueError:
+        return 1
+
+
+async def _try_send_catalog_category_list(
+    db: Session,
+    phone: str,
+    language: str = "english",
+    page: int = 1,
+) -> bool:
+    page = max(1, page)
+    dynamic_rows = await find_cached_shopify_catalog_categories(db, limit=50)
+    rows = []
+    if page == 1:
+        rows.extend(CATALOG_CATEGORY_ROWS)
+
+    first_page_dynamic_slots = 9 - len(CATALOG_CATEGORY_ROWS)
+    start = 0 if page == 1 else first_page_dynamic_slots + ((page - 2) * CATALOG_PAGE_SIZE)
+    if page == 1:
+        end = start + first_page_dynamic_slots
+    else:
+        end = start + CATALOG_PAGE_SIZE
+    rows.extend(dynamic_rows[start:end])
+
+    if end < len(dynamic_rows) and len(rows) < 10:
+        rows.append(
+            {
+                "id": f"catalog:page:{page + 1}",
+                "title": "Next categories",
+                "description": "Show more categories",
+            }
+        )
+    if page > 1 and len(rows) < 10:
+        rows.append(
+            {
+                "id": f"catalog:page:{page - 1}",
+                "title": "Previous categories",
+                "description": "Go back",
+            }
+        )
+    if not rows:
+        return False
     try:
         await run_in_threadpool(
             send_whatsapp_list,
             phone,
-            "Kaunsi category dekhni hai?",
+            _localized(language, "Which category would you like to view?", "Kaunsi category dekhni hai?"),
             "Categories",
             rows,
             "Catalog",
@@ -743,7 +844,7 @@ async def _send_cross_sell_products(
     sent = await _try_send_product_carousel(
         phone,
         products,
-        "Aapko ye bhi pasand aa sakta hai.",
+        _localized(_reply_language(text), "You may also like these.", "Aapko ye bhi pasand aa sakta hai."),
     )
     if sent:
         save_message(db, phone, "[carousel] Cross-sell products", "outgoing")

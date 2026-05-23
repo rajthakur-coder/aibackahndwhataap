@@ -242,10 +242,10 @@ async def find_cached_shopify_category_products(
 
 async def find_cached_shopify_catalog_categories(
     db: Session,
-    limit: int = 8,
+    limit: int = 24,
 ) -> list[dict]:
-    limit = max(1, min(limit, 8))
-    cache_key = f"shopify:categories:v1:limit:{limit}"
+    limit = max(1, min(limit, 50))
+    cache_key = f"shopify:categories:v3:limit:{limit}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
@@ -256,8 +256,9 @@ async def find_cached_shopify_catalog_categories(
 
     counts: Counter[str] = Counter()
     labels: dict[str, str] = {}
+    excluded_labels = _store_labels(products)
     for product in products:
-        for label in _category_labels(product):
+        for label in _category_labels(product, excluded_labels):
             slug = _category_slug(label)
             if not slug:
                 continue
@@ -443,9 +444,10 @@ def _tokens(text: str) -> list[str]:
     return [token.lower() for token in TOKEN_RE.findall(text or "") if len(token) > 1]
 
 
-def _category_labels(product: dict) -> list[str]:
+def _category_labels(product: dict, excluded_labels: set[str] | None = None) -> list[str]:
     labels = []
-    for key in ("category", "product_type", "brand"):
+    excluded_labels = excluded_labels or set()
+    for key in ("category", "product_type"):
         value = str(product.get(key) or "").strip()
         if value:
             labels.append(value)
@@ -459,8 +461,34 @@ def _category_labels(product: dict) -> list[str]:
     return [
         label
         for label in labels
-        if 2 <= len(label) <= 24 and not label.lower().startswith(("all ", "best "))
+        if _is_clean_category_label(label, excluded_labels)
     ]
+
+
+def _store_labels(products: list[dict]) -> set[str]:
+    counts: Counter[str] = Counter()
+    total = max(1, len(products))
+    for product in products:
+        for key in ("brand", "vendor"):
+            value = str(product.get(key) or "").strip().lower()
+            if value:
+                counts[value] += 1
+    return {label for label, count in counts.items() if count >= 3 or count / total >= 0.05}
+
+
+def _is_clean_category_label(label: str, excluded_labels: set[str]) -> bool:
+    normalized = " ".join((label or "").lower().split())
+    if not (2 <= len(label.strip()) <= 24):
+        return False
+    if normalized in excluded_labels:
+        return False
+    if normalized.startswith(("all ", "best ")):
+        return False
+    if normalized in {"my store", "store", "shop", "home senses", "the home senses"}:
+        return False
+    if normalized.endswith((" store", " shop")):
+        return False
+    return True
 
 
 def _category_slug(label: str) -> str:
