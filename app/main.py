@@ -18,6 +18,8 @@ from app.modules.ecommerce.ecommerce_router import (
     shopify_webhooks_router,
 )
 from app.modules.ecommerce.ecommerce_service import ecommerce_auto_sync_loop
+from app.modules.knowledge.knowledge_router import knowledge_router
+from app.modules.scraper.scraper_router import scraper_router
 from app.modules.system.system_router import system_router
 from app.modules.whatsapp.whatsapp_router import whatsapp_router
 
@@ -27,6 +29,8 @@ ROUTERS = [
     whatsapp_router,
     ecommerce_router,
     shopify_webhooks_router,
+    scraper_router,
+    knowledge_router,
     automation_router,
     crm_router,
 ]
@@ -67,6 +71,23 @@ def ensure_contact_columns(connection) -> None:
             connection.execute(text(f"ALTER TABLE contacts ADD COLUMN {name} {ddl_type}"))
 
 
+def ensure_bot_settings_columns(connection) -> None:
+    inspector = inspect(connection)
+    if not inspector.has_table("bot_settings"):
+        return
+
+    existing = {column["name"] for column in inspector.get_columns("bot_settings")}
+    columns = {
+        "ai_personality": "VARCHAR",
+        "ai_tone": "VARCHAR",
+        "response_length": "VARCHAR",
+        "custom_instructions": "TEXT",
+    }
+    for name, ddl_type in columns.items():
+        if name not in existing:
+            connection.execute(text(f"ALTER TABLE bot_settings ADD COLUMN {name} {ddl_type}"))
+
+
 def initialize_database_schema(connection) -> None:
     is_postgres = connection.dialect.name == "postgresql"
     if is_postgres:
@@ -76,6 +97,7 @@ def initialize_database_schema(connection) -> None:
         Base.metadata.create_all(bind=connection)
         ensure_live_chat_message_columns(connection)
         ensure_contact_columns(connection)
+        ensure_bot_settings_columns(connection)
     finally:
         if is_postgres:
             connection.execute(text("SELECT pg_advisory_unlock(hashtext('ai_whatsapp_schema_init'))"))

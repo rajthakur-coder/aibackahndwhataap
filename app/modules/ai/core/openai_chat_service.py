@@ -12,6 +12,25 @@ from app.models.whatsapp import Message
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = 45
 MAX_REPLY_CHARS = 4096
+PERSONALITY_GUIDANCE = {
+    "helpful": "Be helpful, accurate, and practical.",
+    "sales": "Be consultative and gently sales-oriented without being pushy.",
+    "support": "Be patient, reassuring, and support-focused.",
+    "luxury": "Be polished, premium, and concise.",
+    "playful": "Be warm and lightly playful while staying professional.",
+}
+TONE_GUIDANCE = {
+    "friendly": "Use a friendly conversational tone.",
+    "professional": "Use a professional and precise tone.",
+    "casual": "Use a simple casual tone.",
+    "empathetic": "Use an empathetic, calm tone.",
+    "direct": "Use a direct, no-fluff tone.",
+}
+LENGTH_GUIDANCE = {
+    "short": "Keep replies very short, usually 1 sentence.",
+    "brief": "Keep replies brief, usually 1-3 short sentences.",
+    "detailed": "Give a little more detail when useful, but avoid long paragraphs.",
+}
 HINGLISH_TERMS = {
     "aap",
     "abhi",
@@ -66,9 +85,18 @@ def generate_ai_reply(
     context = tool_context.strip()
     reply_language = _reply_language(db, user_message)
 
+    bot_settings = db.execute(select(BotSettings).where(BotSettings.tenant_id == "default")).scalars().first()
+    personality = str(getattr(bot_settings, "ai_personality", "helpful") or "helpful").strip().lower()
+    tone = str(getattr(bot_settings, "ai_tone", "friendly") or "friendly").strip().lower()
+    response_length = str(getattr(bot_settings, "response_length", "brief") or "brief").strip().lower()
+    custom_instructions = str(getattr(bot_settings, "custom_instructions", "") or "").strip()
+
     system_prompt = (
         "You are an advanced WhatsApp AI agent. Reply clearly and briefly. "
         f"Reply in {reply_language}. For neutral greetings like hi or hello, use English unless the user's message has Hindi/Hinglish words. "
+        f"{PERSONALITY_GUIDANCE.get(personality, PERSONALITY_GUIDANCE['helpful'])} "
+        f"{TONE_GUIDANCE.get(tone, TONE_GUIDANCE['friendly'])} "
+        f"{LENGTH_GUIDANCE.get(response_length, LENGTH_GUIDANCE['brief'])} "
         "Use only structured database/tool context when it is provided. "
         "Use customer memory and intent context to personalize the response. "
         "Ask for missing details when an action needs more information. "
@@ -81,6 +109,9 @@ def generate_ai_reply(
 
     if context:
         system_prompt += f"\n\nAvailable business context:\n{context}"
+
+    if custom_instructions:
+        system_prompt += f"\n\nBusiness-specific reply instructions:\n{custom_instructions[:2000]}"
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(_recent_conversation(db, phone))

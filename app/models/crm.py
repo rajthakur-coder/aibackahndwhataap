@@ -97,6 +97,10 @@ class BotSettings(Base):
         Text,
         default="Our support team is offline right now. Your request is noted and the team will reply during business hours.",
     )
+    ai_personality = Column(String, default="helpful")
+    ai_tone = Column(String, default="friendly")
+    response_length = Column(String, default="brief")
+    custom_instructions = Column(Text, nullable=True)
     main_menu_buttons = Column(Text, nullable=True)
     handoff_keywords = Column(Text, nullable=True)
     business_hours_enabled = Column(String, default="false")

@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = "openai/gpt-4o"
     router_model: str = ""
+    firecrawl_api_key: str = ""
+    perplexity_api_key: str = ""
 
     ecommerce_auto_sync_enabled: bool = True
     ecommerce_auto_sync_checkouts_enabled: bool = False

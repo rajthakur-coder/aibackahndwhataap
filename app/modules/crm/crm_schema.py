@@ -23,6 +23,10 @@ class BotSettingsRequest(BaseModel):
     welcome_message: str | None = None
     fallback_message: str | None = None
     offline_message: str | None = None
+    ai_personality: str = "helpful"
+    ai_tone: str = "friendly"
+    response_length: str = "brief"
+    custom_instructions: str | None = None
     main_menu_buttons: list[dict] = []
     handoff_keywords: list[str] = []
     business_hours_enabled: bool = False

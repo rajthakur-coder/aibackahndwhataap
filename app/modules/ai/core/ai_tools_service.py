@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.modules.ai.core.intelligence_service import detect_query_intent
+from app.modules.knowledge.knowledge_service import knowledge_context
 
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -137,7 +138,8 @@ def _customer_context(db: Session, phone: str, _message: str) -> dict:
 
 
 def _policy_faq_context(db: Session, _phone: str, message: str) -> dict:
-    return _product_context(db, _phone, message)
+    context = knowledge_context(db, message)
+    return {"context": context, "data": []} if context else _product_context(db, _phone, message)
 
 
 def _service_context(db: Session, _phone: str, message: str) -> dict:
@@ -145,7 +147,7 @@ def _service_context(db: Session, _phone: str, message: str) -> dict:
 
 
 def _database_hint_context(db: Session, _phone: str, message: str) -> dict:
-    return {"context": "", "data": []}
+    return {"context": knowledge_context(db, message), "data": []}
 
 
 def _general_context(_db: Session, _phone: str, _message: str) -> dict:

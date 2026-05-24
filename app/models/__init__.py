@@ -24,6 +24,7 @@ from app.models.ecommerce import (
     ShopifyCatalogCollection,
     ShopifyWebhookEvent,
 )
+from app.models.knowledge import KnowledgeBase
 from app.models.whatsapp import (
     Message,
     WebhookEvent,
@@ -49,6 +50,7 @@ __all__ = [
     "EcommerceOrder",
     "EcommerceProduct",
     "HandoffTicket",
+    "KnowledgeBase",
     "Lead",
     "Message",
     "MessageTemplate",

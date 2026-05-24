@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -62,6 +62,10 @@ def serialize_bot_settings(row: BotSettings) -> dict:
         "welcome_message": row.welcome_message or "",
         "fallback_message": row.fallback_message or "",
         "offline_message": row.offline_message or "",
+        "ai_personality": row.ai_personality or "helpful",
+        "ai_tone": row.ai_tone or "friendly",
+        "response_length": row.response_length or "brief",
+        "custom_instructions": row.custom_instructions or "",
         "main_menu_buttons": main_menu_buttons if isinstance(main_menu_buttons, list) else [],
         "handoff_keywords": handoff_keywords if isinstance(handoff_keywords, list) else [],
         "business_hours_enabled": _is_db_true(row.business_hours_enabled),
@@ -86,6 +90,10 @@ async def update_bot_settings(data: BotSettingsRequest, db: AsyncSession = Depen
         row.welcome_message = (data.welcome_message or "").strip() or row.welcome_message
         row.fallback_message = (data.fallback_message or "").strip() or row.fallback_message
         row.offline_message = (data.offline_message or "").strip() or row.offline_message
+        row.ai_personality = data.ai_personality.strip() or "helpful"
+        row.ai_tone = data.ai_tone.strip() or "friendly"
+        row.response_length = data.response_length.strip() or "brief"
+        row.custom_instructions = (data.custom_instructions or "").strip()[:2000]
         row.main_menu_buttons = json.dumps(
             [
                 {
@@ -326,20 +334,35 @@ async def payment_link_action(data: ActionRequest, db: AsyncSession = Depends(ge
 
 
 @crm_router.get("/agent/actions")
-async def list_agent_actions(db: AsyncSession = Depends(get_db)):
+async def list_agent_actions(
+    limit: int = 10,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+):
+    limit = min(max(limit, 1), 100)
+    offset = max(offset, 0)
+    total = await db.scalar(select(func.count()).select_from(AgentAction))
     result = await db.execute(
-        select(AgentAction).order_by(AgentAction.created_at.desc()).limit(100)
+        select(AgentAction)
+        .order_by(AgentAction.created_at.desc())
+        .limit(limit)
+        .offset(offset)
     )
     rows = result.scalars().all()
-    return [
-        {
-            "id": row.id,
-            "phone": row.phone,
-            "action_type": row.action_type,
-            "status": row.status,
-            "payload": row.payload,
-            "result": row.result,
-            "created_at": str(row.created_at),
-        }
-        for row in rows
-    ]
+    return {
+        "items": [
+            {
+                "id": row.id,
+                "phone": row.phone,
+                "action_type": row.action_type,
+                "status": row.status,
+                "payload": row.payload,
+                "result": row.result,
+                "created_at": str(row.created_at),
+            }
+            for row in rows
+        ],
+        "total": total or 0,
+        "limit": limit,
+        "offset": offset,
+    }
