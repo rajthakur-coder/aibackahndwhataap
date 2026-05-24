@@ -17,6 +17,7 @@ from app.models.crm import (
     OrderStatus,
 )
 from app.models.ecommerce import (
+    ContactStoreMapping,
     EcommerceConnection,
     EcommerceCustomer,
     EcommerceOrder,
@@ -41,6 +42,7 @@ __all__ = [
     "Base",
     "BotSettings",
     "Contact",
+    "ContactStoreMapping",
     "ContactTag",
     "Tag",
     "CustomerMemory",

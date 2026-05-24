@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["*"]
     database_url: str = "sqlite:///./app.db"
     redis_url: str = "redis://localhost:6379/0"
+    arq_queue_name: str = "whatsapp:webhook:queue"
+    arq_job_timeout_seconds: int = 180
+    arq_max_jobs: int = 10
     debug: str | bool = False
     port: int = 8000
     init_db_on_startup: bool = True
@@ -33,6 +36,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = "openai/gpt-4o"
     router_model: str = ""
+    openrouter_timeout_seconds: int = 20
     firecrawl_api_key: str = ""
     perplexity_api_key: str = ""
 

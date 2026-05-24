@@ -10,8 +10,9 @@ from app.models.whatsapp import Message
 
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-REQUEST_TIMEOUT = 45
+DEFAULT_REQUEST_TIMEOUT = 20
 MAX_REPLY_CHARS = 4096
+MAX_REPLY_TOKENS = 320
 PERSONALITY_GUIDANCE = {
     "helpful": "Be helpful, accurate, and practical.",
     "sales": "Be consultative and gently sales-oriented without being pushy.",
@@ -129,9 +130,9 @@ def generate_ai_reply(
             "model": model,
             "messages": messages,
             "temperature": 0.4,
-            "max_tokens": 500,
+            "max_tokens": MAX_REPLY_TOKENS,
         },
-        timeout=REQUEST_TIMEOUT,
+        timeout=max(5, int(settings.openrouter_timeout_seconds or DEFAULT_REQUEST_TIMEOUT)),
     )
     response.raise_for_status()
 

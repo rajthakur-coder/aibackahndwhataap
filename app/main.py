@@ -21,6 +21,8 @@ from app.modules.knowledge.knowledge_router import knowledge_router
 from app.modules.scraper.scraper_router import scraper_router
 from app.modules.system.system_router import system_router
 from app.modules.whatsapp.whatsapp_router import whatsapp_router
+from app.shared.arq_queue import close_arq_pools
+from app.shared.redis import close_redis
 
 
 ROUTERS = [
@@ -87,6 +89,20 @@ def ensure_bot_settings_columns(connection) -> None:
             connection.execute(text(f"ALTER TABLE bot_settings ADD COLUMN {name} {ddl_type}"))
 
 
+def ensure_contact_store_mapping_columns(connection) -> None:
+    inspector = inspect(connection)
+    if not inspector.has_table("contact_store_mappings"):
+        return
+
+    existing = {column["name"] for column in inspector.get_columns("contact_store_mappings")}
+    columns = {
+        "last_seen_at": "TIMESTAMP",
+    }
+    for name, ddl_type in columns.items():
+        if name not in existing:
+            connection.execute(text(f"ALTER TABLE contact_store_mappings ADD COLUMN {name} {ddl_type}"))
+
+
 def initialize_database_schema(connection) -> None:
     is_postgres = connection.dialect.name == "postgresql"
     if is_postgres:
@@ -97,6 +113,7 @@ def initialize_database_schema(connection) -> None:
         ensure_live_chat_message_columns(connection)
         ensure_contact_columns(connection)
         ensure_bot_settings_columns(connection)
+        ensure_contact_store_mapping_columns(connection)
     finally:
         if is_postgres:
             connection.execute(text("SELECT pg_advisory_unlock(hashtext('ai_whatsapp_schema_init'))"))
@@ -127,6 +144,11 @@ def create_app() -> FastAPI:
                 await db.run_sync(ensure_default_automation_rules)
         if settings.automation_processor_enabled:
             asyncio.create_task(automation_processor_loop())
+
+    @app.on_event("shutdown")
+    async def close_background_resources() -> None:
+        await close_arq_pools()
+        await close_redis()
 
     return app
 

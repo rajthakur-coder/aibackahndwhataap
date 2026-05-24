@@ -1,15 +1,14 @@
-import asyncio
-
 import requests
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
-from app.db.session import AsyncSessionLocal, SessionLocal, get_db
+from app.db.session import get_db
 from app.models.whatsapp import Message, WebhookEvent
+from app.shared.arq_queue import enqueue_whatsapp_webhook_event
 from app.modules.whatsapp.core.live_chat_service import (
     assign_tags_to_contact,
     create_tag,
@@ -33,9 +32,7 @@ from app.modules.whatsapp.whatsapp_schema import (
 from app.modules.whatsapp.whatsapp_service import (
     get_whatsapp_credential,
     get_or_create_webhook_event,
-    mark_webhook_event_failed,
     parse_whatsapp_messages,
-    process_webhook_event,
     save_message,
     serialize_whatsapp_credential,
     send_whatsapp_message,
@@ -383,34 +380,6 @@ async def mark_live_chat_message_read(request: Request, db: AsyncSession = Depen
     )
 
 
-async def process_webhook_event_background(event_id: int) -> None:
-    await asyncio.to_thread(_process_webhook_event_with_session, event_id)
-
-
-def _process_webhook_event_sync(sync_db, event_id: int):
-    event = sync_db.execute(
-        select(WebhookEvent).where(WebhookEvent.id == event_id)
-    ).scalars().first()
-    if not event:
-        return None
-    import asyncio
-
-    return asyncio.run(process_webhook_event(event, sync_db))
-
-
-def _process_webhook_event_with_session(event_id: int) -> None:
-    with SessionLocal() as sync_db:
-        event = sync_db.execute(
-            select(WebhookEvent).where(WebhookEvent.id == event_id)
-        ).scalars().first()
-        if not event:
-            return
-        try:
-            _process_webhook_event_sync(sync_db, event_id)
-        except Exception as exc:
-            mark_webhook_event_failed(sync_db, event, exc)
-
-
 @whatsapp_router.post("/send-message")
 async def send_message(
     data: SendMessageRequest,
@@ -447,7 +416,6 @@ async def verify_whatsapp_cloud_callback(request: Request):
 @whatsapp_router.post("/webhook")
 async def receive_webhook(
     request: Request,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -467,7 +435,10 @@ async def receive_webhook(
             skipped += 1
             continue
 
-        background_tasks.add_task(process_webhook_event_background, event.id)
+        try:
+            await enqueue_whatsapp_webhook_event(event.id)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Webhook queue is unavailable") from exc
         queued += 1
 
     return {
@@ -481,10 +452,9 @@ async def receive_webhook(
 @whatsapp_router.post("/whatsapp/cloud-api/callback")
 async def receive_whatsapp_cloud_callback(
     request: Request,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    return await receive_webhook(request, background_tasks, db)
+    return await receive_webhook(request, db)
 
 
 @whatsapp_router.get("/webhook/events")
@@ -527,21 +497,21 @@ async def retry_failed_webhook_events(
     )
     rows = result.scalars().all()
 
-    retried = 0
+    queued = 0
     failed = 0
     errors = []
     for event in rows:
         try:
-            await asyncio.to_thread(_process_webhook_event_with_session, event.id)
-            retried += 1
+            job_id = await enqueue_whatsapp_webhook_event(event.id, unique=False)
+            if job_id:
+                queued += 1
         except Exception as exc:
-            await db.run_sync(lambda sync_db: mark_webhook_event_failed(sync_db, sync_db.merge(event), exc))
             failed += 1
             errors.append({"event_id": event.id, "error": str(exc)})
 
     return {
-        "status": "completed",
-        "retried": retried,
+        "status": "queued",
+        "queued": queued,
         "failed": failed,
         "errors": errors[:5],
     }

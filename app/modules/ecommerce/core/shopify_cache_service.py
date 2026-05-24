@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
-from app.models.ecommerce import EcommerceConnection, ShopifyCatalogCollection
+from app.models.ecommerce import (
+    ContactStoreMapping,
+    EcommerceConnection,
+    EcommerceCustomer,
+    EcommerceOrder,
+    ShopifyCatalogCollection,
+)
 from app.modules.ai.core.product_search_service import product_search_text, score_search_text, search_terms
 from app.modules.ai.core.sales_recommendations_service import is_sales_recommendation_request
 from app.modules.ecommerce.core.ecommerce_core_service import (
@@ -75,9 +81,9 @@ async def find_cached_shopify_order_status(
     if isinstance(cached, str):
         return cached
 
-    order = await _cached_shopify_order_by_id(db, order_id) if order_id else None
+    order = await _cached_shopify_order_by_id(db, order_id, phone=phone) if order_id else None
     if not order:
-        orders = await _cached_shopify_orders(db)
+        orders = await _cached_shopify_orders(db, phone=phone)
         if not orders:
             return None
         order = _matching_order(orders, phone, order_id)
@@ -94,10 +100,11 @@ async def find_cached_shopify_product_recommendations(
     query: str,
     limit: int = 5,
     entities: dict | None = None,
+    phone: str | None = None,
 ) -> list[dict]:
     if not is_sales_recommendation_request(query):
         return []
-    products = await _rank_cached_shopify_products(db, query, limit, entities=entities)
+    products = await _rank_cached_shopify_products(db, query, limit, entities=entities, phone=phone)
     return products
 
 
@@ -106,9 +113,13 @@ async def find_cached_shopify_cross_sell_products(
     query: str,
     base_products: list[dict],
     limit: int = 3,
+    phone: str | None = None,
 ) -> list[dict]:
     limit = max(1, min(limit, 5))
     if not base_products:
+        return []
+    connection = _active_shopify_connection(db, phone=phone)
+    if not connection:
         return []
 
     signature = ",".join(
@@ -117,16 +128,16 @@ async def find_cached_shopify_cross_sell_products(
             for product in base_products
         )
     )[:160]
-    cache_key = f"shopify:cross-sell:v2:limit:{limit}:{signature}"
+    cache_key = f"shopify:cross-sell:v3:{connection.id}:limit:{limit}:{signature}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
 
-    products = await _cached_all_shopify_products(db)
+    products = await _cached_all_shopify_products(db, phone=phone)
     if not products:
         return []
 
-    result = await _frequently_bought_together_products(db, base_products, products, limit)
+    result = await _frequently_bought_together_products(db, base_products, products, limit, phone=phone)
     if result:
         await _redis_set_json(cache_key, result, settings.shopify_query_cache_ttl_seconds)
         return result
@@ -177,8 +188,9 @@ async def find_cached_shopify_cross_sell_products(
 async def find_cached_shopify_top_selling_products(
     db: Session,
     limit: int = 3,
+    phone: str | None = None,
 ) -> list[dict]:
-    connection = _active_shopify_connection(db)
+    connection = _active_shopify_connection(db, phone=phone)
     if not connection:
         return []
 
@@ -188,11 +200,11 @@ async def find_cached_shopify_top_selling_products(
     if isinstance(cached, list):
         return cached
 
-    orders = await _cached_shopify_sales_orders(db)
+    orders = await _cached_shopify_sales_orders(db, phone=phone)
     if not orders:
         return []
 
-    products = await _cached_all_shopify_products(db)
+    products = await _cached_all_shopify_products(db, phone=phone)
     ranked = _top_selling_from_orders(orders, products, limit)
     if ranked:
         await _redis_set_json(cache_key, ranked, settings.shopify_query_cache_ttl_seconds)
@@ -204,10 +216,11 @@ async def find_cached_shopify_catalog_products(
     query: str,
     limit: int = 5,
     entities: dict | None = None,
+    phone: str | None = None,
 ) -> list[dict]:
     if not is_catalog_request(query):
         return []
-    products = await _rank_cached_shopify_products(db, query, limit, allow_fallback=True, entities=entities)
+    products = await _rank_cached_shopify_products(db, query, limit, allow_fallback=True, entities=entities, phone=phone)
     return products
 
 
@@ -216,23 +229,27 @@ async def find_cached_shopify_category_products(
     category: str,
     limit: int = 5,
     offset: int = 0,
+    phone: str | None = None,
 ) -> list[dict]:
+    connection = _active_shopify_connection(db, phone=phone)
+    if not connection:
+        return []
     limit = max(1, min(limit, 10))
     offset = max(0, offset)
     category_key = " ".join((category or "").lower().split())[:80]
     if not category_key:
         return []
 
-    cache_key = f"shopify:category:v2:{category_key}:limit:{limit}:offset:{offset}"
+    cache_key = f"shopify:category:v3:{connection.id}:{category_key}:limit:{limit}:offset:{offset}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
 
-    products = await _cached_all_shopify_products(db)
+    products = await _cached_all_shopify_products(db, phone=phone)
     if not products:
         return []
 
-    collection_products = await _cached_shopify_collection_products(db, category_key)
+    collection_products = await _cached_shopify_collection_products(db, category_key, phone=phone)
     if collection_products:
         result = collection_products[offset : offset + limit]
     elif category_key in {"all", "all products", "new", "new arrivals"}:
@@ -258,18 +275,22 @@ async def find_cached_shopify_category_products(
 async def find_cached_shopify_catalog_categories(
     db: Session,
     limit: int = 24,
+    phone: str | None = None,
 ) -> list[dict]:
+    connection = _active_shopify_connection(db, phone=phone)
+    if not connection:
+        return []
     limit = max(1, min(limit, 50))
-    cache_key = f"shopify:categories:v5:limit:{limit}"
+    cache_key = f"shopify:categories:v6:{connection.id}:limit:{limit}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
 
-    products = await _cached_all_shopify_products(db)
+    products = await _cached_all_shopify_products(db, phone=phone)
     if not products:
         return []
 
-    collection_categories = await _cached_shopify_collection_categories(db)
+    collection_categories = await _cached_shopify_collection_categories(db, phone=phone)
     if collection_categories:
         categories = collection_categories[:limit]
         await _redis_set_json(cache_key, categories, settings.shopify_query_cache_ttl_seconds)
@@ -315,6 +336,7 @@ async def find_cached_shopify_product_image(
     db: Session,
     query: str,
     entities: dict | None = None,
+    phone: str | None = None,
 ) -> dict | None:
     if not is_image_request(query):
         return None
@@ -325,6 +347,7 @@ async def find_cached_shopify_product_image(
         require_image=True,
         allow_fallback=True,
         entities=entities,
+        phone=phone,
     )
     return products[0] if products else None
 
@@ -336,14 +359,18 @@ async def _rank_cached_shopify_products(
     require_image: bool = False,
     allow_fallback: bool = False,
     entities: dict | None = None,
+    phone: str | None = None,
 ) -> list[dict]:
+    connection = _active_shopify_connection(db, phone=phone)
+    if not connection:
+        return []
     limit = max(1, min(limit, 10))
-    query_key = _query_cache_key(query, limit, require_image, allow_fallback, entities)
+    query_key = _query_cache_key(connection.id, query, limit, require_image, allow_fallback, entities)
     cached = await _redis_get_json(query_key)
     if isinstance(cached, list):
         return cached
 
-    products = await _cached_shopify_products(db)
+    products = await _cached_shopify_products(db, phone=phone)
     if require_image:
         products = [product for product in products if product.get("image_url")]
     if not products:
@@ -386,6 +413,7 @@ async def _rank_cached_shopify_products(
             require_image=require_image,
             allow_fallback=allow_fallback,
             entities={**(entities or {}), "_allow_out_of_stock": True},
+            phone=phone,
         )
 
     result = ranked[:limit]
@@ -394,12 +422,12 @@ async def _rank_cached_shopify_products(
     return result
 
 
-async def _cached_shopify_products(db: Session) -> list[dict]:
-    return await _cached_all_shopify_products(db)
+async def _cached_shopify_products(db: Session, phone: str | None = None) -> list[dict]:
+    return await _cached_all_shopify_products(db, phone=phone)
 
 
-async def _cached_all_shopify_products(db: Session) -> list[dict]:
-    connection = _active_shopify_connection(db)
+async def _cached_all_shopify_products(db: Session, phone: str | None = None) -> list[dict]:
+    connection = _active_shopify_connection(db, phone=phone)
     if not connection:
         return []
 
@@ -418,8 +446,8 @@ async def _cached_all_shopify_products(db: Session) -> list[dict]:
     return products
 
 
-async def _cached_shopify_collection_categories(db: Session) -> list[dict]:
-    connection = _active_shopify_connection(db)
+async def _cached_shopify_collection_categories(db: Session, phone: str | None = None) -> list[dict]:
+    connection = _active_shopify_connection(db, phone=phone)
     if not connection or connection.platform != "shopify":
         return []
 
@@ -428,7 +456,7 @@ async def _cached_shopify_collection_categories(db: Session) -> list[dict]:
     if isinstance(cached, list):
         return cached
 
-    index = await _shopify_collection_index(db)
+    index = await _shopify_collection_index(db, phone=phone)
     categories = [
         {
             "id": f"catalog:category:collection_{item['slug']}",
@@ -442,16 +470,20 @@ async def _cached_shopify_collection_categories(db: Session) -> list[dict]:
     return categories
 
 
-async def _cached_shopify_collection_products(db: Session, category_key: str) -> list[dict]:
+async def _cached_shopify_collection_products(
+    db: Session,
+    category_key: str,
+    phone: str | None = None,
+) -> list[dict]:
     if not category_key.startswith("collection_"):
         return []
     slug = category_key.removeprefix("collection_")
-    index = await _shopify_collection_index(db)
+    index = await _shopify_collection_index(db, phone=phone)
     collection = next((item for item in index if item.get("slug") == slug), None)
     if not collection:
         return []
 
-    products = await _cached_all_shopify_products(db)
+    products = await _cached_all_shopify_products(db, phone=phone)
     product_by_id = {
         str(product.get("shopify_product_id") or product.get("external_id") or ""): product
         for product in products
@@ -463,8 +495,8 @@ async def _cached_shopify_collection_products(db: Session, category_key: str) ->
     ]
 
 
-async def _shopify_collection_index(db: Session) -> list[dict]:
-    connection = _active_shopify_connection(db)
+async def _shopify_collection_index(db: Session, phone: str | None = None) -> list[dict]:
+    connection = _active_shopify_connection(db, phone=phone)
     if not connection or connection.platform != "shopify":
         return []
 
@@ -532,8 +564,8 @@ def _selected_shopify_collections(db: Session, connection_id: int) -> dict[str, 
     }
 
 
-async def _cached_shopify_orders(db: Session) -> list[dict]:
-    connection = _active_shopify_connection(db)
+async def _cached_shopify_orders(db: Session, phone: str | None = None) -> list[dict]:
+    connection = _active_shopify_connection(db, phone=phone)
     if not connection:
         return []
 
@@ -552,8 +584,8 @@ async def _cached_shopify_orders(db: Session) -> list[dict]:
     return orders
 
 
-async def _cached_shopify_sales_orders(db: Session) -> list[dict]:
-    connection = _active_shopify_connection(db)
+async def _cached_shopify_sales_orders(db: Session, phone: str | None = None) -> list[dict]:
+    connection = _active_shopify_connection(db, phone=phone)
     if not connection:
         return []
 
@@ -572,8 +604,12 @@ async def _cached_shopify_sales_orders(db: Session) -> list[dict]:
     return orders
 
 
-async def _cached_shopify_order_by_id(db: Session, order_id: str | None) -> dict | None:
-    connection = _active_shopify_connection(db)
+async def _cached_shopify_order_by_id(
+    db: Session,
+    order_id: str | None,
+    phone: str | None = None,
+) -> dict | None:
+    connection = _active_shopify_connection(db, phone=phone)
     if not connection or not order_id:
         return None
 
@@ -595,12 +631,76 @@ async def _cached_shopify_order_by_id(db: Session, order_id: str | None) -> dict
     return order
 
 
-def _active_shopify_connection(db: Session) -> EcommerceConnection | None:
+def _active_shopify_connection(db: Session, phone: str | None = None) -> EcommerceConnection | None:
+    phone_connection = _shopify_connection_for_phone(db, phone)
+    if phone_connection:
+        return phone_connection
     return db.execute(
         select(EcommerceConnection)
         .where(EcommerceConnection.platform == "shopify", EcommerceConnection.status == "active")
         .order_by(EcommerceConnection.updated_at.desc())
     ).scalars().first()
+
+
+def _shopify_connection_for_phone(db: Session, phone: str | None) -> EcommerceConnection | None:
+    normalized = _digits(phone)
+    if not normalized:
+        return None
+
+    mapping = db.execute(
+        select(ContactStoreMapping)
+        .where(
+            ContactStoreMapping.normalized_phone == normalized,
+            ContactStoreMapping.status == "active",
+        )
+        .order_by(ContactStoreMapping.last_seen_at.desc(), ContactStoreMapping.updated_at.desc())
+    ).scalars().first()
+    if mapping:
+        connection = db.get(EcommerceConnection, mapping.connection_id)
+        if _is_active_shopify_connection(connection):
+            return connection
+
+    orders = db.execute(
+        select(EcommerceOrder)
+        .where(EcommerceOrder.phone.is_not(None))
+        .order_by(EcommerceOrder.updated_at.desc())
+        .limit(100)
+    ).scalars().all()
+    for order in orders:
+        if _digits(order.phone) == normalized:
+            connection = db.get(EcommerceConnection, order.connection_id)
+            if _is_active_shopify_connection(connection):
+                return connection
+
+    customers = db.execute(
+        select(EcommerceCustomer)
+        .where(EcommerceCustomer.phone.is_not(None))
+        .order_by(EcommerceCustomer.updated_at.desc())
+        .limit(100)
+    ).scalars().all()
+    for customer in customers:
+        if _digits(customer.phone) == normalized:
+            connection = db.get(EcommerceConnection, customer.connection_id)
+            if _is_active_shopify_connection(connection):
+                return connection
+
+    owner_connection = db.execute(
+        select(EcommerceConnection)
+        .where(EcommerceConnection.platform == "shopify", EcommerceConnection.status == "active")
+        .order_by(EcommerceConnection.updated_at.desc())
+    ).scalars().all()
+    for connection in owner_connection:
+        if _digits(connection.owner_phone) == normalized:
+            return connection
+    return None
+
+
+def _is_active_shopify_connection(connection: EcommerceConnection | None) -> bool:
+    return bool(
+        connection
+        and connection.platform == "shopify"
+        and connection.status == "active"
+    )
 
 
 def _extract_order_id(query: str) -> str | None:
@@ -800,15 +900,16 @@ async def _frequently_bought_together_products(
     base_products: list[dict],
     products: list[dict],
     limit: int,
+    phone: str | None = None,
 ) -> list[dict]:
-    connection = _active_shopify_connection(db)
+    connection = _active_shopify_connection(db, phone=phone)
     if not connection:
         return []
 
     cache_key = f"shopify:fbt:v1:{connection.id}"
     index = await _redis_get_json(cache_key)
     if not isinstance(index, dict):
-        orders = await _cached_shopify_sales_orders(db)
+        orders = await _cached_shopify_sales_orders(db, phone=phone)
         index = _frequently_bought_together_index(orders)
         if index:
             await _redis_set_json(cache_key, index, settings.shopify_query_cache_ttl_seconds)
@@ -1081,13 +1182,20 @@ def _price_number(value) -> float | None:
         return None
 
 
-def _query_cache_key(query: str, limit: int, require_image: bool, allow_fallback: bool, entities: dict | None = None) -> str:
+def _query_cache_key(
+    connection_id: int,
+    query: str,
+    limit: int,
+    require_image: bool,
+    allow_fallback: bool,
+    entities: dict | None = None,
+) -> str:
     normalized = " ".join((query or "").lower().split())[:180]
     entity_part = ""
     if isinstance(entities, dict) and entities:
         entity_part = json.dumps(entities, sort_keys=True, ensure_ascii=True)[:240]
     flags = f"limit:{limit}:image:{int(require_image)}:fallback:{int(allow_fallback)}"
-    return f"shopify:query:v2:{flags}:{normalized}:{entity_part}"
+    return f"shopify:query:v3:{connection_id}:{flags}:{normalized}:{entity_part}"
 
 
 async def _redis_get_json(key: str):

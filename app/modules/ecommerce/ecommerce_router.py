@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import AsyncSessionLocal, get_db
 from app.models.crm import AgentAction
-from app.models.ecommerce import EcommerceConnection, ShopifyCatalogCollection
+from app.models.ecommerce import ContactStoreMapping, EcommerceConnection, ShopifyCatalogCollection
 from app.modules.automation.automation_service import (
     enqueue_order_automation_events,
     process_automation_event,
@@ -49,7 +49,10 @@ from app.modules.ecommerce.ecommerce_service import (
     validate_shopify_scopes,
     verify_shopify_hmac,
 )
-from app.modules.ecommerce.core.ecommerce_core_service import bootstrap_shopify_connection
+from app.modules.ecommerce.core.ecommerce_core_service import (
+    bootstrap_shopify_connection,
+    upsert_contact_store_mapping,
+)
 from app.shared.redis import get_redis
 
 
@@ -80,13 +83,23 @@ async def _clear_shopify_catalog_cache(connection_id: int) -> None:
         patterns = [
             f"shopify:collections:*:{connection_id}",
             f"shopify:collection-index:*:{connection_id}",
-            "shopify:categories:*",
-            "shopify:category:*",
+            f"shopify:products:all:*:{connection_id}",
+            f"shopify:top-selling:*:{connection_id}:*",
+            f"shopify:fbt:*:{connection_id}",
+            f"shopify:categories:*:{connection_id}:*",
+            f"shopify:category:*:{connection_id}:*",
+            f"shopify:query:*:{connection_id}:*",
+            f"shopify:cross-sell:*:{connection_id}:*",
         ]
         for pattern in patterns:
-            keys = [key async for key in redis.scan_iter(match=pattern, count=100)]
-            if keys:
-                await redis.delete(*keys)
+            batch = []
+            async for key in redis.scan_iter(match=pattern, count=100):
+                batch.append(key)
+                if len(batch) >= 100:
+                    await redis.delete(*batch)
+                    batch = []
+            if batch:
+                await redis.delete(*batch)
     except Exception:
         return
 
@@ -113,6 +126,19 @@ def _shopify_collection_rows(connection: EcommerceConnection) -> list[dict]:
             }
         )
     return sorted(rows, key=lambda row: (-int(row["product_count"] or 0), str(row["title"]).lower()))
+
+
+def _serialize_contact_store_mapping(row: ContactStoreMapping) -> dict:
+    return {
+        "id": row.id,
+        "tenant_id": row.tenant_id,
+        "phone": row.phone,
+        "normalized_phone": row.normalized_phone,
+        "connection_id": row.connection_id,
+        "source": row.source,
+        "status": row.status,
+        "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
+    }
 
 
 async def bootstrap_shopify_connection_background(connection_id: int) -> None:
@@ -297,6 +323,60 @@ async def get_ecommerce_locations(connection_id: int, db: AsyncSession = Depends
             return {"status": "success", "locations": fetch_locations(connection)}
         except requests.RequestException as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return await db.run_sync(sync_op)
+
+
+@ecommerce_router.get("/connections/{connection_id}/contact-store-mappings")
+async def list_contact_store_mappings(
+    connection_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    def sync_op(sync_db: Session):
+        connection = _connection_or_404(sync_db, connection_id)
+        rows = sync_db.execute(
+            select(ContactStoreMapping)
+            .where(
+                ContactStoreMapping.tenant_id == connection.tenant_id,
+                ContactStoreMapping.connection_id == connection.id,
+            )
+            .order_by(ContactStoreMapping.last_seen_at.desc())
+            .limit(200)
+        ).scalars().all()
+        return {
+            "status": "success",
+            "connection_id": connection.id,
+            "mappings": [_serialize_contact_store_mapping(row) for row in rows],
+        }
+
+    return await db.run_sync(sync_op)
+
+
+@ecommerce_router.post("/connections/{connection_id}/contact-store-mappings")
+async def save_contact_store_mapping(
+    connection_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    body = await request.json()
+
+    def sync_op(sync_db: Session):
+        connection = _connection_or_404(sync_db, connection_id)
+        mapping = upsert_contact_store_mapping(
+            sync_db,
+            connection,
+            str(body.get("phone") or body.get("customer_phone_number") or ""),
+            source=str(body.get("source") or "manual"),
+        )
+        if not mapping:
+            raise HTTPException(status_code=400, detail="phone is required")
+        sync_db.commit()
+        sync_db.refresh(mapping)
+        return {
+            "status": "success",
+            "connection_id": connection.id,
+            "mapping": _serialize_contact_store_mapping(mapping),
+        }
 
     return await db.run_sync(sync_op)
 

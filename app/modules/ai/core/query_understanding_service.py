@@ -12,6 +12,16 @@ from app.modules.ai.core.sales_recommendations_service import extract_requested_
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = 15
 ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*(?:id|number|no))?\s*(?:#|:|-)\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b|\b(?:order|ord|booking|invoice)\s+(?:id|number|no)\s+([A-Za-z0-9][A-Za-z0-9-]{1,})\b|#([A-Za-z0-9][A-Za-z0-9-]{1,})\b", re.I)
+FAST_RULE_INTENTS = {
+    "menu_request",
+    "order_status",
+    "top_selling_products",
+    "catalog_request",
+    "image_request",
+    "price_question",
+    "policy_question",
+    "faq_question",
+}
 
 TOOL_BY_INTENT = {
     "greeting": "general_reply",
@@ -56,10 +66,14 @@ class QueryUnderstanding:
 
 
 def understand_message(message: str) -> QueryUnderstanding:
+    rule_result = _rule_understanding(message)
+    if _should_use_rule_fast_path(rule_result):
+        return rule_result
+
     llm_result = _llm_understanding(message)
     if llm_result:
         return llm_result
-    return _rule_understanding(message)
+    return rule_result
 
 
 def _llm_understanding(message: str) -> QueryUnderstanding | None:
@@ -138,6 +152,10 @@ def _rule_understanding(message: str) -> QueryUnderstanding:
     confidence = min(0.95, 0.35 + (query_intent.score * 0.15))
     if intent in {"menu_request", "top_selling_products", "order_status"}:
         confidence = max(confidence, 0.75)
+    elif intent in FAST_RULE_INTENTS and query_intent.score >= 2:
+        confidence = max(confidence, 0.65)
+    elif intent in {"catalog_request", "image_request", "price_question", "policy_question"} and query_intent.score >= 1:
+        confidence = max(confidence, 0.55)
 
     return QueryUnderstanding(
         original_message=message,
@@ -148,6 +166,12 @@ def _rule_understanding(message: str) -> QueryUnderstanding:
         tool=TOOL_BY_INTENT.get(intent, "search_knowledge"),
         source="rules",
     )
+
+
+def _should_use_rule_fast_path(result: QueryUnderstanding) -> bool:
+    if result.intent in {"menu_request", "order_status", "top_selling_products"}:
+        return True
+    return result.intent in FAST_RULE_INTENTS and result.confidence >= 0.55
 
 
 def _normalize_text(message: str) -> str:

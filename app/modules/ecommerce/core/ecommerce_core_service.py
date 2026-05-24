@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.ecommerce import EcommerceConnection, EcommerceOrder, EcommerceProduct
+from app.models.ecommerce import ContactStoreMapping, EcommerceConnection, EcommerceOrder, EcommerceProduct
 from app.models.crm import AgentAction
 from app.models.ecommerce import EcommerceCustomer, ShopifyWebhookEvent
 try:
@@ -1081,6 +1081,7 @@ def upsert_customer(db: Session, connection: EcommerceConnection, customer: dict
     row.last_order_at = customer.get("updated_at") or row.last_order_at
     row.marketing_consent = _json_dumps(customer.get("email_marketing_consent") or {})
     row.preferred_language = customer.get("locale") or row.preferred_language
+    upsert_contact_store_mapping(db, connection, row.phone, source="customer")
     return row
 
 
@@ -1233,7 +1234,42 @@ def upsert_order(db: Session, connection: EcommerceConnection, order: dict) -> E
     row.items = _json_dumps(normalized["items"])
     row.shopify_created_at = normalized["shopify_created_at"]
     row.shopify_updated_at = normalized["shopify_updated_at"]
+    upsert_contact_store_mapping(db, connection, row.phone, source="order")
     return row
+
+
+def upsert_contact_store_mapping(
+    db: Session,
+    connection: EcommerceConnection,
+    phone: str | None,
+    source: str = "auto",
+) -> ContactStoreMapping | None:
+    normalized_phone = _digits(phone)
+    if not normalized_phone:
+        return None
+    mapping = db.execute(
+        select(ContactStoreMapping).where(
+            ContactStoreMapping.tenant_id == connection.tenant_id,
+            ContactStoreMapping.normalized_phone == normalized_phone,
+        )
+    ).scalars().first()
+    if not mapping:
+        mapping = ContactStoreMapping(
+            tenant_id=connection.tenant_id,
+            phone=str(phone or normalized_phone),
+            normalized_phone=normalized_phone,
+        )
+        db.add(mapping)
+    mapping.connection_id = connection.id
+    mapping.phone = str(phone or normalized_phone)
+    mapping.source = source
+    mapping.status = "active"
+    mapping.last_seen_at = datetime.utcnow()
+    return mapping
+
+
+def _digits(value: str | None) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
 
 
 def sync_orders(db: Session, connection: EcommerceConnection, limit: int = 50) -> dict:

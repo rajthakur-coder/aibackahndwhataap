@@ -13,6 +13,7 @@ from app.models.crm import HandoffTicket
 from app.models.crm import Lead
 from app.models.crm import OrderStatus
 from app.models.ecommerce import EcommerceConnection
+from app.models.ecommerce import ContactStoreMapping
 from app.models.ecommerce import EcommerceCustomer
 from app.models.ecommerce import EcommerceOrder
 from app.models.ecommerce import EcommerceProduct
