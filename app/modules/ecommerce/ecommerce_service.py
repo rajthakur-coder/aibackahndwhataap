@@ -39,7 +39,6 @@ from app.modules.ecommerce.core.ecommerce_core_service import (
     verify_shopify_hmac,
 )
 from app.modules.ecommerce.core.ecommerce_sync_service import (
-    ecommerce_auto_sync_loop,
     sync_active_ecommerce_connections,
 )
 
@@ -47,7 +46,6 @@ from app.modules.ecommerce.core.ecommerce_sync_service import (
 __all__ = [
     "create_connection",
     "cross_sell_text",
-    "ecommerce_auto_sync_loop",
     "fetch_all_products",
     "fetch_order_by_number",
     "fetch_order_by_id",

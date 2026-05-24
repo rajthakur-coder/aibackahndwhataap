@@ -17,7 +17,6 @@ from app.modules.ecommerce.ecommerce_router import (
     ecommerce_router,
     shopify_webhooks_router,
 )
-from app.modules.ecommerce.ecommerce_service import ecommerce_auto_sync_loop
 from app.modules.knowledge.knowledge_router import knowledge_router
 from app.modules.scraper.scraper_router import scraper_router
 from app.modules.system.system_router import system_router
@@ -126,8 +125,6 @@ def create_app() -> FastAPI:
                 print(f"Database schema initialization skipped: {exc}")
             async with AsyncSessionLocal() as db:
                 await db.run_sync(ensure_default_automation_rules)
-        if settings.ecommerce_auto_sync_enabled:
-            asyncio.create_task(ecommerce_auto_sync_loop())
         if settings.automation_processor_enabled:
             asyncio.create_task(automation_processor_loop())
 

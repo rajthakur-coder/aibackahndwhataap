@@ -36,7 +36,6 @@ class Settings(BaseSettings):
     firecrawl_api_key: str = ""
     perplexity_api_key: str = ""
 
-    ecommerce_auto_sync_enabled: bool = True
     ecommerce_auto_sync_checkouts_enabled: bool = False
     ecommerce_auto_sync_interval_seconds: int = 300
     ecommerce_auto_sync_limit: int = 50

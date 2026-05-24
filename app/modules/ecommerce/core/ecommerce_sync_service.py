@@ -1,4 +1,3 @@
-import asyncio
 import json
 
 from sqlalchemy import select
@@ -93,11 +92,3 @@ async def retry_failed_shopify_webhooks(limit: int = 25) -> dict:
         return await db.run_sync(
             lambda sync_db: retry_failed_shopify_webhooks_with_session(sync_db, limit)
         )
-
-
-async def ecommerce_auto_sync_loop() -> None:
-    await asyncio.sleep(5)
-    while settings.ecommerce_auto_sync_enabled:
-        await sync_active_ecommerce_connections()
-        await retry_failed_shopify_webhooks()
-        await asyncio.sleep(settings.ecommerce_auto_sync_interval_seconds)

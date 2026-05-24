@@ -352,6 +352,7 @@ async def list_agent_actions(
     return {
         "items": [
             {
+                "sr_no": offset + index,
                 "id": row.id,
                 "phone": row.phone,
                 "action_type": row.action_type,
@@ -360,7 +361,7 @@ async def list_agent_actions(
                 "result": row.result,
                 "created_at": str(row.created_at),
             }
-            for row in rows
+            for index, row in enumerate(rows, start=1)
         ],
         "total": total or 0,
         "limit": limit,

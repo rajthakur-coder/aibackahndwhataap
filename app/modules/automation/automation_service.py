@@ -183,7 +183,10 @@ async def list_automation_rules(db: AsyncSession, trigger: str | None = None) ->
             .order_by(AutomationRule.created_at.desc())
         )
     result = await db.execute(statement)
-    return [serialize_rule(row) for row in result.scalars().all()]
+    return [
+        {**serialize_rule(row), "sr_no": index}
+        for index, row in enumerate(result.scalars().all(), start=1)
+    ]
 
 
 async def update_automation_rule(
