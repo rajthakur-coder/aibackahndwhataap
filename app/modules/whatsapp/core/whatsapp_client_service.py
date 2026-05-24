@@ -7,6 +7,41 @@ WHATSAPP_API_VERSION = "v25.0"
 REQUEST_TIMEOUT = 20
 
 
+def mark_whatsapp_message_read_with_typing(message_id: str) -> dict:
+    access_token = settings.access_token
+    phone_number_id = settings.phone_number_id
+
+    if not access_token or not phone_number_id:
+        raise RuntimeError("WhatsApp credentials are not configured")
+
+    if not message_id:
+        raise ValueError("Message ID is required")
+
+    url = (
+        f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/"
+        f"{phone_number_id}/messages"
+    )
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": message_id,
+        "typing_indicator": {"type": "text"},
+    }
+
+    response = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def send_whatsapp_message(phone: str, message: str) -> dict:
     access_token = settings.access_token
     phone_number_id = settings.phone_number_id

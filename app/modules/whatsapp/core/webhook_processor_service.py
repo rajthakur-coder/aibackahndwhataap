@@ -35,6 +35,7 @@ from app.modules.ecommerce.core.shopify_cache_service import (
     find_cached_shopify_top_selling_products,
 )
 from app.modules.whatsapp.core.whatsapp_client_service import (
+    mark_whatsapp_message_read_with_typing,
     send_whatsapp_carousel,
     send_whatsapp_cta_url,
     send_whatsapp_image,
@@ -202,7 +203,13 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
     db.commit()
 
     if attempt_number == 1:
-        incoming_row = save_message(db, phone, text, "incoming")
+        incoming_row = save_message(
+            db,
+            phone,
+            text,
+            "incoming",
+            whatsapp_message_id=event.external_id,
+        )
         await live_chat_manager.broadcast(
             {
                 "type": "live_chat_message",
@@ -238,6 +245,8 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         db.commit()
         _mark_processed(db, event)
         return
+
+    await _try_mark_read_with_typing(db, event)
 
     active_handoff = _active_handoff_ticket(db, phone)
     if active_handoff:
@@ -728,6 +737,24 @@ def _mark_processed(db: Session, event: WebhookEvent) -> None:
     event.status = "processed"
     event.processed_at = datetime.utcnow()
     db.commit()
+
+
+async def _try_mark_read_with_typing(db: Session, event: WebhookEvent) -> None:
+    if not event.external_id:
+        return
+    try:
+        await run_in_threadpool(mark_whatsapp_message_read_with_typing, event.external_id)
+    except Exception as exc:
+        db.add(
+            AgentAction(
+                phone=event.phone,
+                action_type="typing_indicator_failed",
+                status="failed",
+                payload=json.dumps({"message_id": event.external_id}),
+                result=json.dumps({"error": str(exc)}),
+            )
+        )
+        db.commit()
 
 
 def _active_handoff_ticket(db: Session, phone: str) -> HandoffTicket | None:
