@@ -5,11 +5,12 @@ This backend follows the same package-first FastAPI style as `alignlabs-backend`
 ```text
 backend/
   run.py                 # Local uvicorn entrypoint
-  worker.py              # Background worker entrypoint placeholder
-  main.py                # Compatibility entrypoint that imports app.main
+  worker.py              # Background worker entrypoint
   alembic.ini            # Alembic config, points to app/alembic
   requirements.txt       # Python dependencies
   .env.example           # Required environment variables
+  pytest.ini             # Test configuration
+  tests/                 # Backend tests
   app/
     __init__.py
     config.py            # Environment loading and app settings
@@ -23,24 +24,60 @@ backend/
       mixins.py          # Shared SQLAlchemy mixins
       session.py         # SQLAlchemy engine, SessionLocal, Base, get_db
     models/              # SQLAlchemy models grouped by domain
-      automation.py
-      contact.py
-      crm.py
-      ecommerce.py
-      whatsapp.py
+      automation/        # Templates, rules, events, executions
+      contact/           # Contacts and tags
+      crm/               # CRM models split by record type
+        actions.py
+        appointments.py
+        bot_settings.py
+        customers.py
+        handoffs.py
+        leads.py
+        orders.py
+      ecommerce/         # Connections, orders, products, customers, catalog, webhooks
+      integration/       # Integration records and constants
+      whatsapp/          # Messages, webhook events, credentials, templates
+      audit.py
+      knowledge.py
+      user.py
     modules/             # Domain modules with router/schema/service files
-      ai/
-        core/            # AI routing, query understanding, recommendations
+      ai/                # Chat, intelligence, recommendations, search, tools, understanding
+      audit/
+      auth/
       automation/
-        core/            # Automation scheduling and execution internals
+        events/
+        rules/
+        runtime/
+        shared/
+        templates/
       crm/
-        core/            # CRM agent and customer memory internals
+        agent/
+        agent_actions/
+        handoffs/
+        memory/
+        records/
+        settings/
       ecommerce/
-        core/            # Shopify/WooCommerce sync, cache, serializers
+        catalog/
+        connections/
+        orders/
+        providers/
+        shared/
+        sync/
+        webhooks/
+      integrations/
+        providers/
+      knowledge/
+      scraper/
+        engine/
       system/
+        system_service/
       whatsapp/
         core/            # WhatsApp Cloud API, live chat, webhook processing
     shared/              # Cross-cutting helpers and shared schemas
+      lifecycle.py       # Startup/shutdown hooks
+      middleware.py      # Request middleware
+      schema_init.py     # Startup schema compatibility helpers
     security/            # Auth/security dependencies
     queue/               # Queue/worker integration points
     mail_templates/      # Email template package placeholder

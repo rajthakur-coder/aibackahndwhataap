@@ -1,0 +1,1 @@
+"""AlignLabs-compatible auth module."""

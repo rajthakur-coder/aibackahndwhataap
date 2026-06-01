@@ -1,0 +1,2 @@
+"""Shopify integration provider."""
+

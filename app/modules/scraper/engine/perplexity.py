@@ -15,7 +15,7 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 
-PERPLEXITY_API_KEY = settings.perplexity_api_key
+PERPLEXITY_API_KEY = settings.PERPLEXITY_API_KEY
 API_URL = "https://api.perplexity.ai/chat/completions"
 
 

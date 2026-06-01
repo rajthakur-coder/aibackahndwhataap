@@ -1,0 +1,2 @@
+"""WooCommerce integration provider."""
+

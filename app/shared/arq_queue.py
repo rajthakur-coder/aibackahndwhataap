@@ -8,29 +8,39 @@ from app.config import settings
 
 
 _arq_pools: WeakKeyDictionary[asyncio.AbstractEventLoop, ArqRedis] = WeakKeyDictionary()
+_redis_settings: RedisSettings | None = None
 
 
 def arq_redis_settings() -> RedisSettings:
-    return RedisSettings.from_dsn(settings.REDIS_URL)
+    global _redis_settings
+    if _redis_settings is None:
+        _redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
+    return _redis_settings
 
 
 async def get_arq_pool() -> ArqRedis:
     loop = asyncio.get_running_loop()
     pool = _arq_pools.get(loop)
-    if pool is None:
-        pool = await create_pool(
-            arq_redis_settings(),
-            default_queue_name=settings.arq_queue_name,
-        )
-        _arq_pools[loop] = pool
+    if pool is not None:
+        return pool
+
+    pool = await create_pool(
+        arq_redis_settings(),
+        default_queue_name=settings.ARQ_QUEUE_NAME,
+    )
+    _arq_pools[loop] = pool
     return pool
 
 
 async def close_arq_pools() -> None:
     pools = list(_arq_pools.values())
     _arq_pools.clear()
+
     for pool in pools:
-        await pool.aclose()
+        try:
+            await pool.aclose()
+        except Exception:
+            pass
 
 
 async def enqueue_whatsapp_webhook_event(event_id: int, *, unique: bool = True) -> str | None:
@@ -39,8 +49,8 @@ async def enqueue_whatsapp_webhook_event(event_id: int, *, unique: bool = True) 
         "process_whatsapp_webhook_event",
         event_id,
         _job_id=f"whatsapp-webhook:{event_id}" if unique else None,
-        _queue_name=settings.arq_queue_name,
-        _expires=settings.arq_job_timeout_seconds * 3,
+        _queue_name=settings.ARQ_QUEUE_NAME,
+        _expires=settings.ARQ_DEFAULT_TIMEOUT * 3,
     )
     return job.job_id if job else None
 
@@ -54,10 +64,11 @@ async def enqueue_whatsapp_cross_sell(
     job = await redis.enqueue_job(
         "process_whatsapp_cross_sell",
         phone,
-        text,
+        text[:1000],
         base_products[:5],
-        _queue_name=settings.arq_queue_name,
-        _expires=settings.arq_job_timeout_seconds * 3,
+        _job_id=f"cross-sell:{phone}:{hash(text)}",
+        _queue_name=settings.ARQ_QUEUE_NAME,
+        _expires=settings.ARQ_DEFAULT_TIMEOUT * 3,
     )
     return job.job_id if job else None
 
@@ -69,13 +80,16 @@ async def enqueue_whatsapp_product_images(
     failure_action: str,
 ) -> str | None:
     redis = await get_arq_pool()
+    safe_products = products[:2]
+    product_ids = "-".join(str(p.get("id") or p.get("sku") or "") for p in safe_products)
     job = await redis.enqueue_job(
         "process_whatsapp_product_images",
         phone,
-        products[:2],
+        safe_products,
         caption_mode,
         failure_action,
-        _queue_name=settings.arq_queue_name,
-        _expires=settings.arq_job_timeout_seconds * 3,
+        _job_id=f"product-images:{phone}:{product_ids}:{caption_mode}",
+        _queue_name=settings.ARQ_QUEUE_NAME,
+        _expires=settings.ARQ_DEFAULT_TIMEOUT * 3,
     )
     return job.job_id if job else None

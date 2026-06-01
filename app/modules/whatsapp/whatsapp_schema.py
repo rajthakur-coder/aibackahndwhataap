@@ -29,4 +29,4 @@ class WhatsappCredentialResponse(BaseModel):
     verified_name: str | None = None
     name: str | None = None
     callback_url: str | None = None
-    nerochat_callback_url: str | None = None
+    alignchat_callback_url: str | None = None

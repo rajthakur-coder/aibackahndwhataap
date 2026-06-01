@@ -2,7 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.security import get_current_user_token
 from app.modules.automation import automation_service as service
+from app.modules.automation.outbound_template_service import (
+    meta_template_approval_status,
+    seed_outbound_templates,
+    submit_outbound_templates_to_meta,
+)
 from app.modules.automation.automation_schema import (
     AbandonedCartRequest,
     AutomationEventRequest,
@@ -11,9 +17,14 @@ from app.modules.automation.automation_schema import (
     MessageTemplateRequest,
     SendTemplateRequest,
 )
+from app.shared.tenant import strict_tenant_id
 
 
-automation_router = APIRouter(prefix="/automations", tags=["automations"])
+automation_router = APIRouter(
+    prefix="/automations",
+    tags=["automations"],
+    dependencies=[Depends(get_current_user_token)],
+)
 
 
 def _raise_if_error(result: dict) -> dict:
@@ -28,6 +39,30 @@ def _raise_if_error(result: dict) -> dict:
 @automation_router.post("/seed-defaults")
 async def seed_default_automations(db: AsyncSession = Depends(get_db)):
     return await service.seed_default_automations(db)
+
+
+@automation_router.post("/templates/outbound/seed")
+async def seed_outbound_template_defaults(
+    tenant_id: str = Depends(strict_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    return await db.run_sync(lambda sync_db: seed_outbound_templates(sync_db, tenant_id))
+
+
+@automation_router.post("/templates/outbound/submit-meta")
+async def submit_outbound_templates_to_meta_route(
+    tenant_id: str = Depends(strict_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    return await db.run_sync(lambda sync_db: submit_outbound_templates_to_meta(sync_db, tenant_id))
+
+
+@automation_router.get("/templates/outbound/approval-status")
+async def outbound_template_approval_status(
+    tenant_id: str = Depends(strict_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    return await db.run_sync(lambda sync_db: meta_template_approval_status(sync_db, tenant_id))
 
 
 @automation_router.post("/templates")

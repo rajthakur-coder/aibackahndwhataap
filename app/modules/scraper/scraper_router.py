@@ -1,14 +1,19 @@
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.security import get_current_user_token
 from .scraper_schema import ScraperInput, ScraperResponse
 from .scraper_service import run_brand_scraper
 
 
 logger = logging.getLogger(__name__)
 
-scraper_router = APIRouter(prefix="/scrape", tags=["scraper"])
+scraper_router = APIRouter(
+    prefix="/scrape",
+    tags=["scraper"],
+    dependencies=[Depends(get_current_user_token)],
+)
 
 
 @scraper_router.post("", response_model=ScraperResponse)

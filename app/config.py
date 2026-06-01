@@ -1,5 +1,6 @@
 import os
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,81 +8,83 @@ ENV = os.getenv("ENV", "local")
 
 
 class Settings(BaseSettings):
-    app_name: str = "AI WhatsApp Automation"
-    app_url: str = ""
-    public_webhook_base_url: str = ""
-    shopify_webhook_secret: str = ""
-    shopify_required_scopes: str = (
-        "read_products,read_inventory,read_orders,read_customers,"
-        "read_checkouts,read_fulfillments,read_locations"
-    )
-    ecommerce_token_secret: str = ""
-    cors_origins: list[str] = ["*"]
-    database_url: str = "sqlite:///./app.db"
-    redis_url: str = "redis://localhost:6379/0"
-    arq_queue_name: str = "whatsapp:webhook:queue"
-    arq_job_timeout_seconds: int = 180
-    arq_max_jobs: int = 10
-    debug: str | bool = False
-    port: int = 8000
-    init_db_on_startup: bool = True
+    APP_NAME: str
+    APP_URL: str
+    PUBLIC_WEBHOOK_BASE_URL: str
+    PORT: int
+    DEBUG: bool
+    LOG_LEVEL: str = "INFO"
+    CORS_ORIGINS: list[str]
+    INIT_DB_ON_STARTUP: bool
 
-    meta_app_id: str = ""
-    meta_app_secret: str = ""
-    whatsapp_base_url: str = "https://graph.facebook.com/v25.0"
-    access_token: str = ""
-    phone_number_id: str = ""
-    whatsapp_catalog_id: str = ""
-    verify_token: str = ""
-    openrouter_api_key: str = ""
-    openrouter_model: str = "openai/gpt-4o"
-    router_model: str = ""
-    openrouter_timeout_seconds: int = 20
-    firecrawl_api_key: str = ""
-    perplexity_api_key: str = ""
+    DATABASE_URI: str
+    REDIS_URL: str
 
-    ecommerce_auto_sync_checkouts_enabled: bool = False
-    ecommerce_auto_sync_interval_seconds: int = 300
-    ecommerce_auto_sync_limit: int = 50
-    ecommerce_auto_sync_products_enabled: bool = True
-    ecommerce_auto_sync_product_limit: int = 100
-    shopify_webhook_automation_enabled: bool = False
-    shopify_product_cache_ttl_seconds: int = 3600
-    shopify_query_cache_ttl_seconds: int = 3600
-    shopify_order_cache_ttl_seconds: int = 60
-    automation_processor_enabled: bool = True
-    automation_processor_interval_seconds: int = 60
-    automation_processor_limit: int = 50
-    abandoned_cart_delay_seconds: int = 120
+    SECRET_KEY: str
+    JWT_ALGORITHM: str = "HS256"
+    COOKIE_DOMAIN: str | None = None
+    COOKIE_SECURE: bool = False
+
+    GMAIL_ID: str
+    GMAIL_APP_PASSWORD: str
+    ALIGNAUTH_APP_URL: str
+    ALIGNADS_APP_URL: str = ""
+    API_BASE_URL: str = ""
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+
+    ARQ_QUEUE_NAME: str = "alignlabs:jobs"
+    ARQ_DEFAULT_TIMEOUT: int = 900
+    MAX_CONCURRENT_JOBS: int = 5
+    JOB_MAX_ATTEMPTS: int = 3
+
+    META_APP_ID: str
+    META_APP_SECRET: str
+    WHATSAPP_BASE_URL: str = "https://graph.facebook.com/v25.0"
+    ACCESS_TOKEN: str
+    PHONE_NUMBER_ID: str
+    WHATSAPP_CATALOG_ID: str
+    VERIFY_TOKEN: str
+    WHATSAPP_WEBHOOK_APP_SECRET: str = ""
+
+    OPENROUTER_API_KEY: str
+    OPENROUTER_MODEL: str
+    ROUTER_MODEL: str
+    OPENROUTER_TIMEOUT_SECONDS: int
+    FIRECRAWL_API_KEY: str
+    PERPLEXITY_API_KEY: str
+
+    SHOPIFY_WEBHOOK_SECRET: str
+    SHOPIFY_REQUIRED_SCOPES: list[str]
+    ECOMMERCE_TOKEN_SECRET: str
+    ECOMMERCE_AUTO_SYNC_CHECKOUTS_ENABLED: bool
+    ECOMMERCE_AUTO_SYNC_INTERVAL_SECONDS: int
+    ECOMMERCE_AUTO_SYNC_LIMIT: int
+    ECOMMERCE_AUTO_SYNC_PRODUCTS_ENABLED: bool
+    ECOMMERCE_AUTO_SYNC_PRODUCT_LIMIT: int
+    SHOPIFY_WEBHOOK_AUTOMATION_ENABLED: bool
+    SHOPIFY_PRODUCT_CACHE_TTL_SECONDS: int
+    SHOPIFY_QUERY_CACHE_TTL_SECONDS: int
+    SHOPIFY_ORDER_CACHE_TTL_SECONDS: int
+
+    AUTOMATION_PROCESSOR_ENABLED: bool
+    AUTOMATION_PROCESSOR_INTERVAL_SECONDS: int
+    AUTOMATION_PROCESSOR_LIMIT: int
+    ABANDONED_CART_DELAY_SECONDS: int
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug_aliases(cls, value):
+        if isinstance(value, str) and value.strip().lower() in {"release", "prod", "production"}:
+            return False
+        return value
 
     model_config = SettingsConfigDict(
         env_file=(".env", f".env.{ENV}"),
         env_file_encoding="utf-8",
-        case_sensitive=False,
+        case_sensitive=True,
         extra="ignore",
     )
-
-    @property
-    def DATABASE_URI(self) -> str:
-        return self.database_url
-
-    @property
-    def REDIS_URL(self) -> str:
-        return self.redis_url
-
-    @property
-    def SHOPIFY_REQUIRED_SCOPES(self) -> list[str]:
-        return [
-            scope.strip()
-            for scope in self.shopify_required_scopes.split(",")
-            if scope.strip()
-        ]
-
-    @property
-    def DEBUG(self) -> bool:
-        if isinstance(self.debug, bool):
-            return self.debug
-        return self.debug.strip().lower() in {"1", "true", "yes", "on", "debug", "development", "local"}
 
 
 settings = Settings()

@@ -1,11 +1,10 @@
-from datetime import datetime
+from sqlalchemy import Column, Integer, String, Text
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
-
+from app.db.mixins import TimestampMixin
 from app.db.session import Base
 
 
-class KnowledgeBase(Base):
+class KnowledgeBase(TimestampMixin, Base):
     __tablename__ = "knowledge_bases"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -20,4 +19,3 @@ class KnowledgeBase(Base):
     page_images = Column(Text, nullable=True)
     policies = Column(Text, nullable=True)
     faqs = Column(Text, nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -244,7 +244,7 @@ def scrape_brand_fields_only(url: str) -> Dict[str, Any]:
     Returns ONLY:
       website_link, logo, fonts, color_palette, socials, page_images
     """
-    api_key = settings.firecrawl_api_key
+    api_key = settings.FIRECRAWL_API_KEY
     if not api_key:
         raise RuntimeError("Missing FIRECRAWL_API_KEY environment variable")
 

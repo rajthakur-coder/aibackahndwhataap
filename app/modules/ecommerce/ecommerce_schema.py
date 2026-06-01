@@ -49,5 +49,12 @@ class ShopifyCatalogCollectionSelection(BaseModel):
     sort_order: int = 0
 
 
+class ShopifyCatalogDefaultCategorySelection(BaseModel):
+    category_key: str
+    visible: bool = True
+    sort_order: int = 0
+
+
 class ShopifyCatalogCollectionUpdateRequest(BaseModel):
+    default_categories: list[ShopifyCatalogDefaultCategorySelection] = Field(default_factory=list)
     collections: list[ShopifyCatalogCollectionSelection] = Field(default_factory=list)

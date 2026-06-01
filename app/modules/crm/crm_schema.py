@@ -19,7 +19,7 @@ class HandoffResolveRequest(BaseModel):
 
 class BotSettingsRequest(BaseModel):
     bot_enabled: bool = True
-    default_language: str = "auto"
+    default_language: str = "english"
     welcome_message: str | None = None
     fallback_message: str | None = None
     offline_message: str | None = None
@@ -27,6 +27,7 @@ class BotSettingsRequest(BaseModel):
     ai_tone: str = "friendly"
     response_length: str = "brief"
     custom_instructions: str | None = None
+    brand_prompt: str | None = None
     main_menu_buttons: list[dict] = []
     handoff_keywords: list[str] = []
     business_hours_enabled: bool = False

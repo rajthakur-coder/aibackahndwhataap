@@ -1,0 +1,1 @@
+"""CRM record endpoints."""

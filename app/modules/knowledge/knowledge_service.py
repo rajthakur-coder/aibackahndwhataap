@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models.knowledge import KnowledgeBase
 from app.modules.knowledge.knowledge_schema import KnowledgeBaseRequest
+from app.shared.tenant import DEFAULT_TENANT_ID, normalize_tenant_id
 
 
 def _json_loads(value: str | None, fallback):
@@ -21,13 +22,14 @@ def _json_dumps(value) -> str:
     return json.dumps(value or [], ensure_ascii=True)
 
 
-def get_or_create_knowledge_base(db: Session) -> KnowledgeBase:
+def get_or_create_knowledge_base(db: Session, tenant_id: str = DEFAULT_TENANT_ID) -> KnowledgeBase:
+    tenant_id = normalize_tenant_id(tenant_id)
     row = db.execute(
-        select(KnowledgeBase).where(KnowledgeBase.tenant_id == "default")
+        select(KnowledgeBase).where(KnowledgeBase.tenant_id == tenant_id)
     ).scalars().first()
     if row:
         return row
-    row = KnowledgeBase(tenant_id="default")
+    row = KnowledgeBase(tenant_id=tenant_id)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -50,8 +52,8 @@ def serialize_knowledge_base(row: KnowledgeBase) -> dict:
     }
 
 
-def save_knowledge_base(db: Session, data: KnowledgeBaseRequest) -> dict:
-    row = get_or_create_knowledge_base(db)
+def save_knowledge_base(db: Session, data: KnowledgeBaseRequest, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
+    row = get_or_create_knowledge_base(db, tenant_id)
     row.website_link = (data.website_link or "").strip() or None
     row.company_name = (data.company_name or "").strip() or None
     row.industry = (data.industry or "").strip() or None
@@ -67,9 +69,10 @@ def save_knowledge_base(db: Session, data: KnowledgeBaseRequest) -> dict:
     return serialize_knowledge_base(row)
 
 
-def knowledge_context(db: Session, message: str = "") -> str:
+def knowledge_context(db: Session, message: str = "", tenant_id: str = DEFAULT_TENANT_ID) -> str:
+    tenant_id = normalize_tenant_id(tenant_id)
     row = db.execute(
-        select(KnowledgeBase).where(KnowledgeBase.tenant_id == "default")
+        select(KnowledgeBase).where(KnowledgeBase.tenant_id == tenant_id)
     ).scalars().first()
     if not row:
         return ""
