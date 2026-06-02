@@ -45,7 +45,7 @@ origins = settings.CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://roulette-exemplary-senate.ngrok-free.dev","https://auth-7dcu.onrender.com","http://localhost:3000","http://localhost:3001","http://localhost:3002"
+        "https://roulette-exemplary-senate.ngrok-free.dev","https://auth-7dcu.onrender.com","http://localhost:3000","http://localhost:3001","https://chating-ai.onrender.com","http://localhost:3002"
     ],
     allow_credentials=True,
     allow_methods=["*"],
