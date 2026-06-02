@@ -45,6 +45,7 @@ def upsert_customer(db: Session, connection: EcommerceConnection, customer: dict
     row.last_order_at = customer.get("updated_at") or row.last_order_at
     row.marketing_consent = _json_dumps(customer.get("email_marketing_consent") or {})
     row.preferred_language = customer.get("locale") or row.preferred_language
+    db.add(row)
     upsert_contact_store_mapping(db, connection, row.phone, source="customer")
     return row
 
@@ -92,6 +93,7 @@ def upsert_order(db: Session, connection: EcommerceConnection, order: dict) -> E
     row.items = _json_dumps(normalized["items"])
     row.shopify_created_at = normalized["shopify_created_at"]
     row.shopify_updated_at = normalized["shopify_updated_at"]
+    db.add(row)
     upsert_contact_store_mapping(db, connection, row.phone, source="order")
     return row
 
