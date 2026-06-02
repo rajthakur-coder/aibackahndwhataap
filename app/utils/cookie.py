@@ -10,7 +10,8 @@ def get_cookie_options(key: str, value: str, max_age: int = 3600) -> dict:
         "domain": settings.COOKIE_DOMAIN or None,
         "secure": settings.COOKIE_SECURE,
         "httponly": True,
-        "samesite": "lax",
+       "samesite": "none",
+"secure": True
     }
 
 
@@ -21,5 +22,6 @@ def get_delete_cookie_options(key: str) -> dict:
         "domain": settings.COOKIE_DOMAIN or None,
         "secure": settings.COOKIE_SECURE,
         "httponly": True,
-        "samesite": "lax",
+        "samesite": "none",
+"secure": True
     }
