@@ -44,12 +44,13 @@ origins = settings.CORS_ORIGINS
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=[
+        "https://roulette-exemplary-senate.ngrok-free.dev","http://localhost:3000","http://localhost:3001","http://localhost:3002"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 @app.on_event("startup")
 async def startup():
