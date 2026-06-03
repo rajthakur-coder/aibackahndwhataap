@@ -10,6 +10,7 @@ from app.modules.knowledge.knowledge_service import knowledge_context
 
 
 ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*(?:id|number|no))?\s*(?:#|:|-)\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b|\b(?:order|ord|booking|invoice)\s+(?:id|number|no)\s+([A-Za-z0-9][A-Za-z0-9-]{1,})\b|#([A-Za-z0-9][A-Za-z0-9-]{1,})\b", re.I)
+BARE_ORDER_RE = re.compile(r"^\s*#?([A-Za-z0-9][A-Za-z0-9-]{2,})\s*$")
 TOOL_NAMES = {
     "get_order_status",
     "search_products",
@@ -98,7 +99,10 @@ def _llm_tool_decision(message: str) -> ToolDecision | None:
 
 def _order_id(message: str) -> str | None:
     match = ORDER_RE.search(message or "")
-    return next((group.upper() for group in match.groups() if group), None) if match else None
+    if match:
+        return next((group.upper() for group in match.groups() if group), None)
+    bare_match = BARE_ORDER_RE.match(message or "")
+    return bare_match.group(1).upper() if bare_match else None
 
 
 def _order_status_context(db: Session, phone: str, message: str) -> dict:

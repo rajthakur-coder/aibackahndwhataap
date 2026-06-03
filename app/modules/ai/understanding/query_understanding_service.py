@@ -8,6 +8,7 @@ from app.modules.headless.llm_provider import chat_completion
 
 
 ORDER_RE = re.compile(r"\b(?:order|ord|booking|invoice)(?:\s*(?:id|number|no))?\s*(?:#|:|-)\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b|\b(?:order|ord|booking|invoice)\s+(?:id|number|no)\s+([A-Za-z0-9][A-Za-z0-9-]{1,})\b|#([A-Za-z0-9][A-Za-z0-9-]{1,})\b", re.I)
+BARE_ORDER_RE = re.compile(r"^\s*#?([A-Za-z0-9][A-Za-z0-9-]{2,})\s*$")
 FAST_RULE_INTENTS = {
     "menu_request",
     "order_status",
@@ -127,6 +128,8 @@ def _rule_understanding(message: str) -> QueryUnderstanding:
     intent = query_intent.name
     if _looks_like_greeting_or_menu(normalized):
         intent = "menu_request"
+    elif _bare_order_id(normalized):
+        intent = "order_status"
     elif is_top_selling_request(normalized):
         intent = "top_selling_products"
     elif query_intent.name == "tracking_question":
@@ -183,10 +186,19 @@ def _merge_rule_entities(message: str, entities: dict) -> dict:
     order_match = ORDER_RE.search(message or "")
     if order_match and not merged.get("order_id"):
         merged["order_id"] = next((group.upper() for group in order_match.groups() if group), None)
+    elif not merged.get("order_id"):
+        bare_order_id = _bare_order_id(message)
+        if bare_order_id:
+            merged["order_id"] = bare_order_id
     requested_limit = extract_requested_limit(message, default=0)
     if requested_limit and not merged.get("limit"):
         merged["limit"] = requested_limit
     return {key: value for key, value in merged.items() if value not in (None, "", [])}
+
+
+def _bare_order_id(message: str) -> str | None:
+    match = BARE_ORDER_RE.match(message or "")
+    return match.group(1).upper() if match else None
 
 
 def _clamp_confidence(value, default: float) -> float:

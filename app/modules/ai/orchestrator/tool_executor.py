@@ -41,6 +41,7 @@ ORDER_RE = re.compile(
     r"|#([A-Za-z0-9][A-Za-z0-9-]{1,})\b",
     re.I,
 )
+BARE_ORDER_RE = re.compile(r"^\s*#?([A-Za-z0-9][A-Za-z0-9-]{2,})\s*$")
 
 
 def execute_tool(
@@ -695,7 +696,10 @@ def _product_dict(product: EcommerceProduct) -> dict:
 
 def _extract_order_id(message: str) -> str | None:
     match = ORDER_RE.search(message or "")
-    return next((group.upper() for group in match.groups() if group), None) if match else None
+    if match:
+        return next((group.upper() for group in match.groups() if group), None)
+    bare_match = BARE_ORDER_RE.match(message or "")
+    return bare_match.group(1).upper() if bare_match else None
 
 
 def _catalog_query(message: str, entities: dict) -> str:
