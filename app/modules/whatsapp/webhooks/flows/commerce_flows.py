@@ -72,6 +72,8 @@ async def _handle_commerce_interactive_flows(context: WebhookProcessingContext) 
         return await _send_return_item_or_reason_list(context)
     if _is_return_item_selection(text):
         return await _send_return_reason_list(context)
+    if _is_manual_return_item_selection(context, text):
+        return await _send_return_reason_list(context)
     if _is_return_reason(text):
         return await _send_return_outcome_buttons(context)
     if _is_return_outcome(text):
@@ -226,7 +228,8 @@ async def _send_order_status(context: WebhookProcessingContext, data: dict) -> N
 
 
 async def _send_return_order_or_reason_list(context: WebhookProcessingContext) -> bool:
-    if _return_flow_state(context).get("order_id"):
+    current_order_id = _extract_return_order_id(context.text or context.query_text or "")
+    if current_order_id:
         return await _send_return_item_or_reason_list(context)
 
     orders = list_recent_orders_for_customer(context.db, context.phone, limit=3, tenant_id=context.tenant_id)
@@ -534,6 +537,10 @@ def _is_return_item_selection(text: str) -> bool:
     return text.startswith("return_item:")
 
 
+def _is_manual_return_item_selection(context: WebhookProcessingContext, text: str) -> bool:
+    return bool(text and _latest_interactive_title(context) == "return items")
+
+
 def _is_return_reason(text: str) -> bool:
     return text in {
         "damaged",
@@ -629,6 +636,58 @@ def _message_is_in_return_context(context: WebhookProcessingContext, message_id:
         return _looks_like_return_prompt(row.message)
     title = str(payload.get("title") or "").strip().lower() if isinstance(payload, dict) else ""
     return title in {"return reasons", "return orders", "return", "reason"} or _looks_like_return_prompt(row.message)
+
+
+def _message_is_in_return_items_context(context: WebhookProcessingContext, message_id: int) -> bool:
+    return _latest_return_items_payload(context, message_id) is not None
+
+
+def _return_item_selection_from_text(context: WebhookProcessingContext, text: str, message_id: int) -> dict | None:
+    payload = _latest_return_items_payload(context, message_id)
+    if not payload:
+        return None
+    selected = str(text or "").strip().lower()
+    for row in payload.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title") or "").strip().lower()
+        description = str(row.get("description") or "").strip().lower()
+        if selected not in {title, description}:
+            continue
+        row_id = str(row.get("id") or "")
+        parts = row_id.split(":")
+        if len(parts) < 3 or parts[0] != "return_item":
+            return None
+        return {"order_id": parts[1].strip(), "item_ids": [parts[2].strip()]}
+    return None
+
+
+def _latest_return_items_payload(context: WebhookProcessingContext, before_message_id: int | None = None) -> dict | None:
+    statement = (
+        select(Message)
+        .where(
+            Message.tenant_id == context.tenant_id,
+            Message.phone == context.phone,
+            Message.direction == "outgoing",
+            Message.message_type.in_(["buttons", "list"]),
+            Message.payload.is_not(None),
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    )
+    if before_message_id is not None:
+        statement = statement.where(Message.id < before_message_id)
+    row = context.db.execute(statement).scalars().first()
+    if not row or not row.payload:
+        return None
+    try:
+        payload = json.loads(row.payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    title = str(payload.get("title") or "").strip().lower()
+    return payload if title == "return items" else None
 
 
 def _latest_return_context_active(context: WebhookProcessingContext) -> bool:
@@ -744,6 +803,10 @@ def _return_flow_state(context: WebhookProcessingContext) -> dict:
             if len(parts) >= 3:
                 state["order_id"] = parts[1].strip()
                 state["item_ids"] = [parts[2].strip()]
+        elif _message_is_in_return_items_context(context, row.id):
+            selection = _return_item_selection_from_text(context, text, row.id)
+            if selection:
+                state.update(selection)
         elif _looks_like_order_id(text) and _message_is_in_return_context(context, row.id):
             state["order_id"] = text.strip().lstrip("#")
         elif ("return" in lowered or "exchange" in lowered) and _extract_return_order_id(text):
