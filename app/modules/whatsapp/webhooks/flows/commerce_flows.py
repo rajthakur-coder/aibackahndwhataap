@@ -55,7 +55,8 @@ GIFTING_ROWS = [
 ]
 RETURN_ORDER_RE = re.compile(
     r"\b(?:return|exchange)\b.*?(?:order|ord|invoice|booking)\s*(?:id|number|no)?\s*(?:#|:|-)?\s*([A-Za-z0-9][A-Za-z0-9-]{2,})\b"
-    r"|\b(?:return|exchange)\b.*?#([A-Za-z0-9][A-Za-z0-9-]{2,})\b",
+    r"|\b(?:return|exchange)\b.*?#([A-Za-z0-9][A-Za-z0-9-]{2,})\b"
+    r"|\b(?:return|exchange)\s+([A-Za-z0-9][A-Za-z0-9-]{2,})\b",
     re.I,
 )
 
@@ -261,7 +262,7 @@ async def _send_return_order_or_reason_list(context: WebhookProcessingContext) -
 
 
 async def _send_return_item_or_reason_list(context: WebhookProcessingContext) -> bool:
-    state = _return_flow_state(context)
+    state = {**_latest_return_payload_state(context), **_return_flow_state(context)}
     current_text = (context.text or context.query_text or "").strip()
     lowered = current_text.lower()
     if lowered.startswith("return_order:"):
@@ -298,13 +299,43 @@ async def _send_return_item_or_reason_list(context: WebhookProcessingContext) ->
     body = _flow_text(context, "return_item_prompt", "Which item do you want to return or exchange?")
     try:
         await run_in_threadpool(send_whatsapp_list, context.phone, body, "Items", rows, "Return", "Items")
-        save_message(context.db, context.phone, "[list] Return items", "outgoing", message_type="list", payload={"title": "Return items", "body": body, "rows": rows})
+        save_message(
+            context.db,
+            context.phone,
+            "[list] Return items",
+            "outgoing",
+            message_type="list",
+            payload={"title": "Return items", "body": body, "rows": rows, "return_state": state},
+        )
         return True
     except Exception:
         return await _send_return_reason_list(context)
 
 
 async def _send_return_reason_list(context: WebhookProcessingContext) -> bool:
+    state = {**_latest_return_payload_state(context), **_return_flow_state(context)}
+    current_text = (context.text or context.query_text or "").strip()
+    lowered = current_text.lower()
+    if lowered.startswith("return_item:"):
+        parts = current_text.split(":")
+        if len(parts) >= 3:
+            state["order_id"] = parts[1].strip()
+            state["item_ids"] = [parts[2].strip()]
+    elif _is_manual_return_item_selection(context, lowered):
+        latest_row = context.db.execute(
+            select(Message)
+            .where(
+                Message.tenant_id == context.tenant_id,
+                Message.phone == context.phone,
+                Message.direction == "incoming",
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        ).scalars().first()
+        if latest_row:
+            selection = _return_item_selection_from_text(context, current_text, latest_row.id)
+            if selection:
+                state.update(selection)
     body = _flow_text(context, "return_reason_prompt", "Sorry it did not work out. What went wrong?")
     try:
         await run_in_threadpool(
@@ -316,7 +347,14 @@ async def _send_return_reason_list(context: WebhookProcessingContext) -> bool:
             "Return",
             "Reason",
         )
-        save_message(context.db, context.phone, "[list] Return reasons", "outgoing", message_type="list", payload={"title": "Return reasons", "body": body, "rows": RETURN_REASON_ROWS})
+        save_message(
+            context.db,
+            context.phone,
+            "[list] Return reasons",
+            "outgoing",
+            message_type="list",
+            payload={"title": "Return reasons", "body": body, "rows": RETURN_REASON_ROWS, "return_state": state},
+        )
         return True
     except Exception:
         await _send_text(
@@ -331,6 +369,10 @@ async def _send_return_reason_list(context: WebhookProcessingContext) -> bool:
 
 
 async def _send_return_outcome_buttons(context: WebhookProcessingContext) -> bool:
+    state = {**_latest_return_payload_state(context), **_return_flow_state(context)}
+    current_text = (context.text or context.query_text or "").strip().lower()
+    if _is_return_reason(current_text):
+        state["reason"] = _return_reason_label(current_text)
     body = _flow_text(
         context,
         "return_outcome_prompt",
@@ -339,7 +381,14 @@ async def _send_return_outcome_buttons(context: WebhookProcessingContext) -> boo
     buttons = _flow_buttons(context, "return_outcome_buttons", RETURN_OUTCOME_BUTTONS)
     try:
         await run_in_threadpool(send_whatsapp_reply_buttons, context.phone, body, buttons, "Return options")
-        save_message(context.db, context.phone, "[buttons] Return outcome", "outgoing", message_type="buttons", payload={"title": "Return outcome", "body": body, "buttons": buttons})
+        save_message(
+            context.db,
+            context.phone,
+            "[buttons] Return outcome",
+            "outgoing",
+            message_type="buttons",
+            payload={"title": "Return outcome", "body": body, "buttons": buttons, "return_state": state},
+        )
         return True
     except Exception:
         await _send_text(context, body)
@@ -347,7 +396,7 @@ async def _send_return_outcome_buttons(context: WebhookProcessingContext) -> boo
 
 
 async def _send_return_confirmation(context: WebhookProcessingContext) -> bool:
-    state = _return_flow_state(context)
+    state = {**_return_flow_state(context), **_latest_return_payload_state(context)}
     current_text = (context.text or context.query_text or "").strip().lower()
     if _is_return_outcome(current_text):
         state["outcome"] = _return_outcome_label(current_text)
@@ -737,6 +786,34 @@ def _latest_return_confirm_state(context: WebhookProcessingContext) -> dict:
     if not isinstance(payload, dict):
         return {}
     if str(payload.get("title") or "").strip().lower() != "confirm return":
+        return {}
+    state = payload.get("return_state")
+    return state if isinstance(state, dict) else {}
+
+
+def _latest_return_payload_state(context: WebhookProcessingContext) -> dict:
+    row = context.db.execute(
+        select(Message)
+        .where(
+            Message.tenant_id == context.tenant_id,
+            Message.phone == context.phone,
+            Message.direction == "outgoing",
+            Message.message_type.in_(["buttons", "list"]),
+            Message.payload.is_not(None),
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    ).scalars().first()
+    if not row or not row.payload:
+        return {}
+    try:
+        payload = json.loads(row.payload)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    title = str(payload.get("title") or "").strip().lower()
+    if title not in {"return items", "return reasons", "return outcome", "confirm return"}:
         return {}
     state = payload.get("return_state")
     return state if isinstance(state, dict) else {}
