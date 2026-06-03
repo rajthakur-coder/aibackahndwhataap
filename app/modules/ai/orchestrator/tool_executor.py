@@ -563,11 +563,48 @@ def _initiate_return(
     _mark_oms_return_requested(db, tenant_id, eligibility, request)
     db.commit()
     db.refresh(request)
+    confirmation_message = _return_confirmation_message(request, eligibility, outcome)
     return ToolCallResult(
         "initiate_return",
         "success",
-        f"Return request #{request.id} has been logged.",
+        confirmation_message,
         {"return_request_id": request.id, "status": request.status, "outcome": outcome, "eligibility": eligibility},
+    )
+
+
+def _return_confirmation_message(request: EcommerceReturnRequest, eligibility: dict, outcome: str) -> str:
+    preference = str(outcome or "Return request").strip()
+    order_number = request.order_number or eligibility.get("order_number") or eligibility.get("order_id")
+    request_label = "Return"
+    next_step = (
+        "Our support team will verify the request and update you shortly. "
+        "You'll receive the next update on WhatsApp."
+    )
+
+    if preference.lower() == "exchange":
+        request_label = "Exchange"
+        next_step = (
+            "Our support team will verify the item and confirm exchange availability shortly. "
+            "You'll receive the next update on WhatsApp."
+        )
+    elif preference.lower() == "store credit":
+        request_label = "Store credit"
+        next_step = (
+            "Our support team will verify the return and issue store credit after approval. "
+            "You'll receive the next update on WhatsApp."
+        )
+    elif preference.lower() == "refund":
+        next_step = (
+            "Our support team will verify the request. Refund will be processed after approval "
+            "and item verification. You'll receive the next update on WhatsApp."
+        )
+
+    return (
+        f"{request_label} request #{request.id} created successfully.\n\n"
+        f"Order: {order_number}\n"
+        f"Preference: {preference}\n"
+        "Status: Under review\n\n"
+        f"{next_step}"
     )
 
 
