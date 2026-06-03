@@ -834,7 +834,7 @@ def _order_items(order) -> list[dict]:
 
 
 def _return_flow_state(context: WebhookProcessingContext) -> dict:
-    rows = context.db.execute(
+    rows_desc = context.db.execute(
         select(Message)
         .where(
             Message.tenant_id == context.tenant_id,
@@ -842,8 +842,17 @@ def _return_flow_state(context: WebhookProcessingContext) -> dict:
             Message.direction == "incoming",
         )
         .order_by(Message.created_at.desc(), Message.id.desc())
-        .limit(12)
+        .limit(30)
     ).scalars().all()
+    boundary_index = next(
+        (
+            index
+            for index, row in enumerate(rows_desc)
+            if _is_return_flow_start_marker(str(row.message or "").strip().lower())
+        ),
+        None,
+    )
+    rows = rows_desc[: boundary_index + 1] if boundary_index is not None else rows_desc[:12]
     state: dict = {}
     for row in reversed(rows):
         text = str(row.message or "").strip()
@@ -868,6 +877,14 @@ def _return_flow_state(context: WebhookProcessingContext) -> dict:
         elif _is_return_outcome(lowered):
             state["outcome"] = _return_outcome_label(lowered)
     return state
+
+
+def _is_return_flow_start_marker(text: str) -> bool:
+    return (
+        text in {"return / exchange", "return / exchanges", "return"}
+        or text.startswith("return_order:")
+        or (("return" in text or "exchange" in text) and bool(_extract_return_order_id(text)))
+    )
 
 
 def _return_summary_text(context: WebhookProcessingContext, state: dict) -> str:
