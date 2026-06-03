@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     WHATSAPP_CATALOG_ID: str
     VERIFY_TOKEN: str
     WHATSAPP_WEBHOOK_APP_SECRET: str = ""
+    WHATSAPP_REGISTER_PIN: str = ""
 
     OPENROUTER_API_KEY: str
     OPENROUTER_MODEL: str

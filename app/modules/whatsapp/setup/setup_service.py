@@ -171,10 +171,15 @@ def _exchange_authorization_code(code: str) -> str:
 
 
 def _register_phone_number(phone_number_id: str, token: str) -> None:
+    data = {"messaging_product": "whatsapp"}
+    register_pin = str(settings.WHATSAPP_REGISTER_PIN or "").strip()
+    if register_pin:
+        data["pin"] = register_pin
+
     _post_graph(
         f"{settings.WHATSAPP_BASE_URL}/{phone_number_id}/register",
         token=token,
-        data={"messaging_product": "whatsapp", "pin": "797711"},
+        data=data,
     )
 
 
