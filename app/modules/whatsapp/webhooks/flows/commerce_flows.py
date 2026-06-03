@@ -262,6 +262,14 @@ async def _send_return_order_or_reason_list(context: WebhookProcessingContext) -
 
 async def _send_return_item_or_reason_list(context: WebhookProcessingContext) -> bool:
     state = _return_flow_state(context)
+    current_text = (context.text or context.query_text or "").strip()
+    lowered = current_text.lower()
+    if lowered.startswith("return_order:"):
+        state["order_id"] = current_text.split(":", 1)[1].strip()
+    elif _extract_return_order_id(current_text):
+        state["order_id"] = _extract_return_order_id(current_text)
+    elif _looks_like_order_id(current_text) and _latest_return_context_active(context):
+        state["order_id"] = current_text.lstrip("#")
     order_id = state.get("order_id")
     order = find_order_for_customer(context.db, context.phone, order_id, tenant_id=context.tenant_id) if order_id else None
     if order_id and not order:
@@ -340,6 +348,9 @@ async def _send_return_outcome_buttons(context: WebhookProcessingContext) -> boo
 
 async def _send_return_confirmation(context: WebhookProcessingContext) -> bool:
     state = _return_flow_state(context)
+    current_text = (context.text or context.query_text or "").strip().lower()
+    if _is_return_outcome(current_text):
+        state["outcome"] = _return_outcome_label(current_text)
     summary = _return_summary_text(context, state)
     body = _flow_text(
         context,
@@ -355,7 +366,19 @@ async def _send_return_confirmation(context: WebhookProcessingContext) -> bool:
             [{"id": "confirm:return:yes", "title": "Yes"}, {"id": "confirm:return:no", "title": "No"}],
             "Confirm return",
         )
-        save_message(context.db, context.phone, "[buttons] Confirm return", "outgoing", message_type="buttons", payload={"title": "Confirm return", "body": body})
+        save_message(
+            context.db,
+            context.phone,
+            "[buttons] Confirm return",
+            "outgoing",
+            message_type="buttons",
+            payload={
+                "title": "Confirm return",
+                "body": body,
+                "buttons": [{"id": "confirm:return:yes", "title": "Yes"}, {"id": "confirm:return:no", "title": "No"}],
+                "return_state": state,
+            },
+        )
         return True
     except Exception:
         await _send_text(
@@ -372,6 +395,8 @@ async def _send_return_confirmation(context: WebhookProcessingContext) -> bool:
 
 async def _send_return_eligibility_result(context: WebhookProcessingContext, confirmed: bool) -> bool:
     state = _return_flow_state(context)
+    if confirmed:
+        state = {**state, **_latest_return_confirm_state(context)}
     result = execute_tool(
         context.db,
         "initiate_return" if confirmed else "get_return_eligibility",
@@ -688,6 +713,33 @@ def _latest_return_items_payload(context: WebhookProcessingContext, before_messa
         return None
     title = str(payload.get("title") or "").strip().lower()
     return payload if title == "return items" else None
+
+
+def _latest_return_confirm_state(context: WebhookProcessingContext) -> dict:
+    row = context.db.execute(
+        select(Message)
+        .where(
+            Message.tenant_id == context.tenant_id,
+            Message.phone == context.phone,
+            Message.direction == "outgoing",
+            Message.message_type == "buttons",
+            Message.payload.is_not(None),
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    ).scalars().first()
+    if not row or not row.payload:
+        return {}
+    try:
+        payload = json.loads(row.payload)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if str(payload.get("title") or "").strip().lower() != "confirm return":
+        return {}
+    state = payload.get("return_state")
+    return state if isinstance(state, dict) else {}
 
 
 def _latest_return_context_active(context: WebhookProcessingContext) -> bool:
