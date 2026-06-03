@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     COOKIE_DOMAIN: str | None = None
     COOKIE_SECURE: bool = False
+    COOKIE_SAMESITE: str = "lax"
 
     GMAIL_ID: str
     GMAIL_APP_PASSWORD: str
@@ -78,6 +79,14 @@ class Settings(BaseSettings):
         if isinstance(value, str) and value.strip().lower() in {"release", "prod", "production"}:
             return False
         return value
+
+    @field_validator("COOKIE_SAMESITE", mode="before")
+    @classmethod
+    def normalize_cookie_samesite(cls, value):
+        normalized = str(value or "lax").strip().lower()
+        if normalized not in {"lax", "strict", "none"}:
+            raise ValueError("COOKIE_SAMESITE must be one of: lax, strict, none")
+        return normalized
 
     model_config = SettingsConfigDict(
         env_file=(".env", f".env.{ENV}"),

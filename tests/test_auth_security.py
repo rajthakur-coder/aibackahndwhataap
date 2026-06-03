@@ -2,6 +2,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
+from app.config import settings
 from app.shared.tenant import reset_current_tenant_id, set_current_tenant_id, strict_tenant_id
 from app.utils import create_token, decode_token, get_cookie_options
 
@@ -30,11 +31,12 @@ def test_jwt_round_trip_keeps_user_id():
     assert payload["id"] == "user-1"
 
 
-def test_auth_cookie_is_http_only_and_lax():
+def test_auth_cookie_uses_configured_security_flags():
     options = get_cookie_options("access_token", "token-value", max_age=60)
 
     assert options["httponly"] is True
-    assert options["samesite"] == "lax"
+    assert options["samesite"] == settings.COOKIE_SAMESITE
+    assert options["secure"] is (settings.COOKIE_SECURE or settings.COOKIE_SAMESITE == "none")
     assert options["path"] == "/"
     assert options["max_age"] == 60
 
