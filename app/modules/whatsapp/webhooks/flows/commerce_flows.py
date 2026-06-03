@@ -617,7 +617,7 @@ def _is_return_outcome(text: str) -> bool:
 
 
 def _is_manual_return_order_id(context: WebhookProcessingContext, text: str) -> bool:
-    return _looks_like_order_id(text) and _latest_return_context_active(context)
+    return _looks_like_order_id(text) and (_latest_return_context_active(context) or _latest_return_session_active(context))
 
 
 def _looks_like_order_id(text: str) -> bool:
@@ -764,7 +764,27 @@ def _latest_return_context_active(context: WebhookProcessingContext) -> bool:
     except json.JSONDecodeError:
         return False
     title = str(payload.get("title") or "").strip().lower() if isinstance(payload, dict) else ""
-    return title in {"return reasons", "return orders", "return", "reason"}
+    return title in {"return reasons", "return orders", "return items", "return outcome", "confirm return", "return", "reason"}
+
+
+def _latest_return_session_active(context: WebhookProcessingContext) -> bool:
+    rows = context.db.execute(
+        select(Message)
+        .where(
+            Message.tenant_id == context.tenant_id,
+            Message.phone == context.phone,
+            Message.direction == "incoming",
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(20)
+    ).scalars().all()
+    for row in rows:
+        text = str(row.message or "").strip().lower()
+        if _is_return_confirmation_no(text):
+            return False
+        if _is_return_flow_start_marker(text):
+            return True
+    return False
 
 
 def _looks_like_return_prompt(message: str | None) -> bool:

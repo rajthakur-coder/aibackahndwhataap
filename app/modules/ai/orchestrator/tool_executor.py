@@ -921,7 +921,7 @@ def _return_window_days(db: Session, tenant_id: str) -> int:
 
 def _order_delivered_at(order) -> datetime | None:
     delivery_state = " ".join(str(value or "").lower() for value in (order.delivery_status, order.shipment_status, order.fulfillment_status, order.status))
-    if "delivered" not in delivery_state:
+    if "delivered" not in delivery_state and "fulfilled" not in delivery_state:
         return None
     value = order.updated_at
     if isinstance(value, datetime):

@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.crm import AgentAction
@@ -55,13 +55,20 @@ def upsert_customer(db: Session, connection: EcommerceConnection, customer: dict
 def upsert_order(db: Session, connection: EcommerceConnection, order: dict) -> EcommerceOrder:
     normalized = _normalize_order(connection, order)
     customer = upsert_customer(db, connection, normalized.get("customer"))
-    row = EcommerceOrder(
-        tenant_id=connection.tenant_id,
-        connection_id=connection.id,
-        platform=connection.platform,
-        external_id=normalized["external_id"],
-        order_number=normalized["order_number"],
-    )
+    row = _existing_order_row(db, connection, normalized)
+    if not row:
+        row = EcommerceOrder(
+            tenant_id=connection.tenant_id,
+            connection_id=connection.id,
+            platform=connection.platform,
+            external_id=normalized["external_id"],
+            order_number=normalized["order_number"],
+        )
+        db.add(row)
+    row.tenant_id = connection.tenant_id
+    row.connection_id = connection.id
+    row.platform = connection.platform
+    row.external_id = normalized["external_id"]
     row.shopify_order_id = normalized["shopify_order_id"]
     row.ecommerce_customer_id = customer.id if customer else row.ecommerce_customer_id
     row.order_number = normalized["order_number"]
@@ -91,11 +98,45 @@ def upsert_order(db: Session, connection: EcommerceConnection, order: dict) -> E
     row.skus = _json_dumps(normalized["skus"])
     row.product_ids = _json_dumps(normalized["product_ids"])
     row.items = _json_dumps(normalized["items"])
+    row.raw_payload = _json_dumps(order)
     row.shopify_created_at = normalized["shopify_created_at"]
     row.shopify_updated_at = normalized["shopify_updated_at"]
-    db.add(row)
     upsert_contact_store_mapping(db, connection, row.phone, source="order")
     return row
+
+
+def _existing_order_row(db: Session, connection: EcommerceConnection, normalized: dict) -> EcommerceOrder | None:
+    order_number = str(normalized.get("order_number") or "").strip()
+    clean_order_number = order_number.lstrip("#")
+    external_id = str(normalized.get("external_id") or "").strip()
+    shopify_order_id = str(normalized.get("shopify_order_id") or "").strip()
+    matches = []
+    if external_id:
+        matches.append(EcommerceOrder.external_id == external_id)
+    if shopify_order_id:
+        matches.append(EcommerceOrder.shopify_order_id == shopify_order_id)
+    if order_number:
+        matches.extend(
+            [
+                EcommerceOrder.order_number == order_number,
+                EcommerceOrder.order_number == clean_order_number,
+                EcommerceOrder.order_number == f"#{clean_order_number}",
+            ]
+        )
+    if not matches:
+        return None
+    return db.execute(
+        select(EcommerceOrder)
+        .where(
+            EcommerceOrder.tenant_id == connection.tenant_id,
+            EcommerceOrder.connection_id == connection.id,
+            EcommerceOrder.platform == connection.platform,
+            or_(*matches),
+        )
+        .order_by(EcommerceOrder.updated_at.desc(), EcommerceOrder.id.desc())
+        .limit(1)
+    ).scalars().first()
+
 
 def upsert_contact_store_mapping(
     db: Session,
@@ -142,6 +183,11 @@ def find_order_for_customer(
     tenant_id: str | None = None,
 ) -> EcommerceOrder | None:
     tenant_id = tenant_id or _tenant_for_phone(db, phone)
+    if order_id:
+        live_order = _find_live_order_for_customer(db, phone, order_id, tenant_id)
+        if live_order:
+            return live_order
+
     statement = select(EcommerceOrder)
     if order_id:
         normalized_order_id = order_id.strip().lstrip("#")
@@ -159,6 +205,8 @@ def find_order_for_customer(
     cached = db.execute(statement.order_by(EcommerceOrder.updated_at.desc())).scalars().first()
     if cached:
         return cached
+    if order_id:
+        return None
     return _find_live_order_for_customer(db, phone, order_id, tenant_id)
 
 
