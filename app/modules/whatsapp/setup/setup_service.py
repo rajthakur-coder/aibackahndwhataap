@@ -79,6 +79,7 @@ def setup_whatsapp_business(
     credential.token = encrypt_token(system_access_token)
     db.commit()
 
+    _configure_data_localization(phone_number_id, system_access_token)
     _register_phone_number(phone_number_id, system_access_token)
 
     business_info = _get_graph(
@@ -182,6 +183,25 @@ def _register_phone_number(phone_number_id: str, token: str) -> None:
         f"{settings.WHATSAPP_BASE_URL}/{phone_number_id}/register",
         token=token,
         data=data,
+    )
+
+
+def _configure_data_localization(phone_number_id: str, token: str) -> None:
+    region = str(settings.WHATSAPP_DATA_LOCALIZATION_REGION or "").strip().upper()
+    if not region:
+        return
+    if not re.fullmatch(r"[A-Z]{2}", region):
+        raise RuntimeError("WHATSAPP_DATA_LOCALIZATION_REGION must be a 2-letter ISO country code")
+
+    _post_graph(
+        f"{settings.WHATSAPP_BASE_URL}/{phone_number_id}/settings",
+        token=token,
+        data={
+            "storage_configuration": {
+                "status": "IN_COUNTRY_STORAGE_ENABLED",
+                "data_localization_region": region,
+            }
+        },
     )
 
 
