@@ -269,10 +269,12 @@ async def _send_return_item_or_reason_list(context: WebhookProcessingContext) ->
         state["order_id"] = current_text.split(":", 1)[1].strip()
     elif _extract_return_order_id(current_text):
         state["order_id"] = _extract_return_order_id(current_text)
-    elif _looks_like_order_id(current_text) and _latest_return_context_active(context):
+    elif _looks_like_order_id(current_text) and (_latest_return_context_active(context) or _latest_return_session_active(context)):
         state["order_id"] = current_text.lstrip("#")
     order_id = state.get("order_id")
     order = find_order_for_customer(context.db, context.phone, order_id, tenant_id=context.tenant_id) if order_id else None
+    if order:
+        state["order_id"] = order.order_number
     if order_id and not order:
         await _send_text(
             context,
@@ -286,7 +288,7 @@ async def _send_return_item_or_reason_list(context: WebhookProcessingContext) ->
         return True
     items = _order_items(order) if order else []
     if len(items) <= 1:
-        return await _send_return_reason_list(context)
+        return await _send_return_reason_list(context, state)
 
     rows = [
         {
@@ -309,11 +311,11 @@ async def _send_return_item_or_reason_list(context: WebhookProcessingContext) ->
         )
         return True
     except Exception:
-        return await _send_return_reason_list(context)
+        return await _send_return_reason_list(context, state)
 
 
-async def _send_return_reason_list(context: WebhookProcessingContext) -> bool:
-    state = {**_latest_return_payload_state(context), **_return_flow_state(context)}
+async def _send_return_reason_list(context: WebhookProcessingContext, initial_state: dict | None = None) -> bool:
+    state = {**_latest_return_payload_state(context), **_return_flow_state(context), **(initial_state or {})}
     current_text = (context.text or context.query_text or "").strip()
     lowered = current_text.lower()
     if lowered.startswith("return_item:"):
