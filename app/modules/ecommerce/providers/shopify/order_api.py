@@ -97,9 +97,10 @@ def fetch_order_by_number(connection: EcommerceConnection, order_number: str) ->
                 params={"status": "any", "limit": 1, "name": name, "fields": fields},
             )
             orders = response.json().get("orders", [])
-            if orders:
-                return orders[0]
-        return None
+            for order in orders:
+                if _matches_shopify_order_number(order, clean_order_number):
+                    return order
+        return _scan_recent_shopify_orders_by_number(connection, clean_order_number, fields)
 
     response = requests.get(
         f"{_woocommerce_base_url(connection)}/orders",
@@ -112,6 +113,47 @@ def fetch_order_by_number(connection: EcommerceConnection, order_number: str) ->
         if str(order.get("number") or order.get("id") or "").lstrip("#") == clean_order_number:
             return order
     return None
+
+
+def _scan_recent_shopify_orders_by_number(
+    connection: EcommerceConnection,
+    clean_order_number: str,
+    fields: str,
+) -> dict | None:
+    page_info = None
+    while True:
+        params = {
+            "status": "any",
+            "limit": 250,
+            "fields": fields,
+        }
+        if page_info:
+            params = {
+                "limit": 250,
+                "page_info": page_info,
+                "fields": fields,
+            }
+        response = _shopify_request("GET", connection, "/orders.json", params=params)
+        orders = response.json().get("orders", [])
+        if not orders:
+            return None
+        for order in orders:
+            if _matches_shopify_order_number(order, clean_order_number):
+                return order
+        page_info = _next_page_info(response)
+        if not page_info:
+            return None
+    return None
+
+
+def _matches_shopify_order_number(order: dict, clean_order_number: str) -> bool:
+    expected = str(clean_order_number or "").strip().lstrip("#").upper()
+    candidates = {
+        str(order.get("name") or "").strip().lstrip("#").upper(),
+        str(order.get("order_number") or "").strip().lstrip("#").upper(),
+        str(order.get("number") or "").strip().lstrip("#").upper(),
+    }
+    return expected in candidates
 
 def fetch_order_by_id(connection: EcommerceConnection, order_id: str) -> dict | None:
     clean_order_id = str(order_id or "").strip()

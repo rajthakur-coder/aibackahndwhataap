@@ -49,6 +49,17 @@ def orchestrate_message(
         tenant_id=tenant_id,
     )
 
+    deterministic_reply = _deterministic_reply(tool_result)
+    if deterministic_reply:
+        reply = deterministic_reply
+        return OrchestratorResponse(
+            reply=reply,
+            intent=understanding.intent,
+            selected_tool=selected_tool,
+            confidence=understanding.confidence,
+            tool_result=tool_result,
+        )
+
     try:
         if tool_result.status == "needs_confirmation":
             reply = fallback_reply(tool_result)
@@ -171,3 +182,29 @@ def _run_selected_tool(
         entities=entities,
         tenant_id=tenant_id,
     )
+
+
+def _deterministic_reply(tool_result: ToolCallResult) -> str | None:
+    if tool_result.tool_name != "get_order_status" or tool_result.status != "success":
+        return None
+    if not isinstance(tool_result.data, dict):
+        return None
+
+    order_number = tool_result.data.get("order_number") or tool_result.data.get("id") or "your order"
+    status = (
+        tool_result.data.get("fulfillment_status")
+        or tool_result.data.get("shipment_status")
+        or tool_result.data.get("delivery_status")
+        or tool_result.data.get("status")
+        or "received"
+    )
+    parts = [f"Your order {order_number} status is {status}."]
+    if tool_result.data.get("tracking_number"):
+        parts.append(f"Tracking number: {tool_result.data['tracking_number']}.")
+    if tool_result.data.get("tracking_url"):
+        parts.append(f"Track here: {tool_result.data['tracking_url']}")
+    total = tool_result.data.get("total")
+    currency = tool_result.data.get("currency")
+    if total:
+        parts.append(f"Total: {total}{f' {currency}' if currency else ''}")
+    return " ".join(parts).strip()

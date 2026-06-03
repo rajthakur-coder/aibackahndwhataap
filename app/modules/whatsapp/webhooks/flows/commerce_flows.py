@@ -15,7 +15,7 @@ from app.modules.whatsapp.client.interactive_client_service import (
     send_whatsapp_reply_buttons,
 )
 from app.modules.ai.orchestrator.tool_executor import execute_tool
-from app.modules.ecommerce.orders.order_service import list_recent_orders_for_customer
+from app.modules.ecommerce.orders.order_service import find_order_for_customer, list_recent_orders_for_customer
 from app.modules.tenants.tenant_service import get_tenant_config, serialize_tenant_config
 from app.modules.whatsapp.webhooks.responses.catalog_service import try_send_catalog_category_list
 from app.modules.whatsapp.webhooks.responses.menu_service import main_menu_buttons
@@ -63,6 +63,10 @@ async def _handle_commerce_interactive_flows(context: WebhookProcessingContext) 
         return await _send_shop_list(context)
     if _is_track_request(text):
         return await _send_track_status_or_prompt(context)
+    if _is_return_order_selection(text):
+        return await _send_return_item_or_reason_list(context)
+    if _is_return_item_selection(text):
+        return await _send_return_reason_list(context)
     if _is_return_request(text):
         return await _send_return_order_or_reason_list(context)
     if _is_return_confirmation_yes(text):
@@ -80,7 +84,7 @@ async def _handle_commerce_interactive_flows(context: WebhookProcessingContext) 
     if _is_gifting_request(text):
         return await _send_gifting_list(context)
     if _is_return_reason(text):
-        return await _send_return_confirmation(context)
+        return await _send_return_outcome_buttons(context)
     if _is_gifting_occasion(text):
         return await _send_gifting_quantity_buttons(context)
     if _is_gifting_quantity(text):
@@ -90,7 +94,7 @@ async def _handle_commerce_interactive_flows(context: WebhookProcessingContext) 
     if _is_gifting_contact_response(context, text):
         return await _send_gifting_contact_ack(context)
     if _is_return_outcome(text):
-        return await _send_return_eligibility_result(context, confirmed=False)
+        return await _send_return_confirmation(context)
     return False
 
 
@@ -235,6 +239,31 @@ async def _send_return_order_or_reason_list(context: WebhookProcessingContext) -
     return await _send_return_reason_list(context)
 
 
+async def _send_return_item_or_reason_list(context: WebhookProcessingContext) -> bool:
+    state = _return_flow_state(context)
+    order_id = state.get("order_id")
+    order = find_order_for_customer(context.db, context.phone, order_id, tenant_id=context.tenant_id) if order_id else None
+    items = _order_items(order) if order else []
+    if len(items) <= 1:
+        return await _send_return_reason_list(context)
+
+    rows = [
+        {
+            "id": f"return_item:{order.order_number}:{index}",
+            "title": str(item.get("name") or item.get("title") or item.get("sku") or f"Item {index + 1}")[:24],
+            "description": f"Qty {item.get('quantity') or 1}",
+        }
+        for index, item in enumerate(items[:10])
+    ]
+    body = _flow_text(context, "return_item_prompt", "Which item do you want to return or exchange?")
+    try:
+        await run_in_threadpool(send_whatsapp_list, context.phone, body, "Items", rows, "Return", "Items")
+        save_message(context.db, context.phone, "[list] Return items", "outgoing", message_type="list", payload={"title": "Return items", "body": body, "rows": rows})
+        return True
+    except Exception:
+        return await _send_return_reason_list(context)
+
+
 async def _send_return_reason_list(context: WebhookProcessingContext) -> bool:
     body = _flow_text(context, "return_reason_prompt", "Sorry it did not work out. What went wrong?")
     try:
@@ -261,11 +290,30 @@ async def _send_return_reason_list(context: WebhookProcessingContext) -> bool:
         return True
 
 
+async def _send_return_outcome_buttons(context: WebhookProcessingContext) -> bool:
+    body = _flow_text(
+        context,
+        "return_outcome_prompt",
+        "What would you prefer: refund, exchange, or store credit?",
+    )
+    buttons = _flow_buttons(context, "return_outcome_buttons", RETURN_OUTCOME_BUTTONS)
+    try:
+        await run_in_threadpool(send_whatsapp_reply_buttons, context.phone, body, buttons, "Return options")
+        save_message(context.db, context.phone, "[buttons] Return outcome", "outgoing", message_type="buttons", payload={"title": "Return outcome", "body": body, "buttons": buttons})
+        return True
+    except Exception:
+        await _send_text(context, body)
+        return True
+
+
 async def _send_return_confirmation(context: WebhookProcessingContext) -> bool:
+    state = _return_flow_state(context)
+    summary = _return_summary_text(context, state)
     body = _flow_text(
         context,
         "return_confirmation_prompt",
-        "I can check return eligibility first.\n\nShould I continue?",
+        "{summary}\n\nI can check return eligibility and log the request. Should I continue?",
+        summary=summary,
     )
     try:
         await run_in_threadpool(
@@ -291,12 +339,13 @@ async def _send_return_confirmation(context: WebhookProcessingContext) -> bool:
 
 
 async def _send_return_eligibility_result(context: WebhookProcessingContext, confirmed: bool) -> bool:
+    state = _return_flow_state(context)
     result = execute_tool(
         context.db,
         "initiate_return" if confirmed else "get_return_eligibility",
         phone=context.phone,
         message="confirm:return:yes" if confirmed else context.query_text,
-        entities={**getattr(context.understanding, "entities", {}), "confirmed": confirmed},
+        entities={**getattr(context.understanding, "entities", {}), **state, "confirmed": confirmed},
         tenant_id=context.tenant_id,
     )
     data = result.data if isinstance(result.data, dict) else {}
@@ -444,6 +493,14 @@ def _is_return_request(text: str) -> bool:
     return text in {"return / exchange", "return / exchanges", "return", "exchange"} or text.startswith("return_order:")
 
 
+def _is_return_order_selection(text: str) -> bool:
+    return text.startswith("return_order:")
+
+
+def _is_return_item_selection(text: str) -> bool:
+    return text.startswith("return_item:")
+
+
 def _is_return_reason(text: str) -> bool:
     return text in {
         "damaged",
@@ -528,16 +585,90 @@ def _latest_interactive_title(context: WebhookProcessingContext) -> str:
 
 
 def _first_order_item_name(order) -> str | None:
-    import json
-
-    try:
-        items = json.loads(order.items or "[]")
-    except json.JSONDecodeError:
-        return None
+    items = _order_items(order)
     if not items:
         return None
     first = items[0] if isinstance(items[0], dict) else {}
     return first.get("name") or first.get("title") or first.get("sku")
+
+
+def _order_items(order) -> list[dict]:
+    if not order:
+        return []
+    try:
+        items = json.loads(order.items or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+
+def _return_flow_state(context: WebhookProcessingContext) -> dict:
+    rows = context.db.execute(
+        select(Message)
+        .where(
+            Message.tenant_id == context.tenant_id,
+            Message.phone == context.phone,
+            Message.direction == "incoming",
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(12)
+    ).scalars().all()
+    state: dict = {}
+    for row in reversed(rows):
+        text = str(row.message or "").strip()
+        lowered = text.lower()
+        if lowered.startswith("return_order:"):
+            state["order_id"] = text.split(":", 1)[1].strip()
+        elif lowered.startswith("return_item:"):
+            parts = text.split(":")
+            if len(parts) >= 3:
+                state["order_id"] = parts[1].strip()
+                state["item_ids"] = [parts[2].strip()]
+        elif _is_return_reason(lowered):
+            state["reason"] = _return_reason_label(lowered)
+        elif _is_return_outcome(lowered):
+            state["outcome"] = _return_outcome_label(lowered)
+    return state
+
+
+def _return_summary_text(context: WebhookProcessingContext, state: dict) -> str:
+    order_id = state.get("order_id") or "the selected order"
+    reason = state.get("reason") or "not specified"
+    outcome = state.get("outcome") or "return request"
+    item_text = ""
+    item_ids = state.get("item_ids") if isinstance(state.get("item_ids"), list) else []
+    if item_ids:
+        order = find_order_for_customer(context.db, context.phone, order_id, tenant_id=context.tenant_id)
+        items = _order_items(order)
+        try:
+            item = items[int(item_ids[0])]
+            item_text = f"\nItem: {item.get('name') or item.get('title') or item.get('sku') or f'Item {int(item_ids[0]) + 1}'}"
+        except (IndexError, TypeError, ValueError):
+            item_text = f"\nItem: #{item_ids[0]}"
+    return f"Order: {order_id}{item_text}\nReason: {reason}\nPreference: {outcome}"
+
+
+def _return_reason_label(text: str) -> str:
+    labels = {
+        "return:damaged": "Damaged or defective",
+        "damaged": "Damaged or defective",
+        "return:wrong": "Wrong product received",
+        "wrong product": "Wrong product received",
+        "return:style": "Color, size, or feel issue",
+        "doesn't suit": "Color, size, or feel issue",
+        "return:changed": "Changed mind",
+        "changed mind": "Changed mind",
+    }
+    return labels.get(text, text)
+
+
+def _return_outcome_label(text: str) -> str:
+    labels = {
+        "return:refund": "Refund",
+        "return:exchange": "Exchange",
+        "return:credit": "Store credit",
+    }
+    return labels.get(text, text)
 
 
 def _brand_payload(context: WebhookProcessingContext) -> dict:

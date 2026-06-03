@@ -545,6 +545,7 @@ def _initiate_return(
         )
 
     reason = str(entities.get("reason") or message or "").strip()
+    outcome = str(entities.get("outcome") or "return request").strip()
     item_ids = entities.get("item_ids") if isinstance(entities.get("item_ids"), list) else []
     request = EcommerceReturnRequest(
         tenant_id=tenant_id,
@@ -555,7 +556,7 @@ def _initiate_return(
         reason=reason,
         item_ids=_json_dumps(item_ids),
         eligibility=_json_dumps(eligibility),
-        notes="Created by AI commerce action. OMS return adapter still needs final processing.",
+        notes=f"Preference: {outcome}. Created by AI commerce action. OMS return adapter still needs final processing.",
     )
     db.add(request)
     db.flush()
@@ -566,7 +567,7 @@ def _initiate_return(
         "initiate_return",
         "success",
         f"Return request #{request.id} has been logged.",
-        {"return_request_id": request.id, "status": request.status, "eligibility": eligibility},
+        {"return_request_id": request.id, "status": request.status, "outcome": outcome, "eligibility": eligibility},
     )
 
 
