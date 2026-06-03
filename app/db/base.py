@@ -27,6 +27,7 @@ from app.models.ecommerce import ShopifyCatalogCollection
 from app.models.ecommerce import ShopifyCatalogDefaultCategory
 from app.models.ecommerce import ShopifyWebhookEvent
 from app.models.integration import Integration
+from app.models.knowledge import KnowledgeBase
 from app.models.tenants import AgencyTenantAccess, TenantConfig
 from app.models.user import User
 from app.models.whatsapp import Message

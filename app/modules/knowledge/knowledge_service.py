@@ -1,6 +1,7 @@
 import json
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.knowledge import KnowledgeBase
@@ -71,9 +72,13 @@ def save_knowledge_base(db: Session, data: KnowledgeBaseRequest, tenant_id: str 
 
 def knowledge_context(db: Session, message: str = "", tenant_id: str = DEFAULT_TENANT_ID) -> str:
     tenant_id = normalize_tenant_id(tenant_id)
-    row = db.execute(
-        select(KnowledgeBase).where(KnowledgeBase.tenant_id == tenant_id)
-    ).scalars().first()
+    try:
+        row = db.execute(
+            select(KnowledgeBase).where(KnowledgeBase.tenant_id == tenant_id)
+        ).scalars().first()
+    except SQLAlchemyError:
+        db.rollback()
+        return ""
     if not row:
         return ""
 

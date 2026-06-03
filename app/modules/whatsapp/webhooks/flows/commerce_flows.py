@@ -67,6 +67,8 @@ async def _handle_commerce_interactive_flows(context: WebhookProcessingContext) 
         return await _send_return_item_or_reason_list(context)
     if _is_return_item_selection(text):
         return await _send_return_reason_list(context)
+    if _is_manual_return_order_id(context, text):
+        return await _send_return_item_or_reason_list(context)
     if _is_return_request(text):
         return await _send_return_order_or_reason_list(context)
     if _is_return_confirmation_yes(text):
@@ -236,13 +238,32 @@ async def _send_return_order_or_reason_list(context: WebhookProcessingContext) -
             return True
         except Exception:
             pass
-    return await _send_return_reason_list(context)
+    await _send_text(
+        context,
+        _flow_text(
+            context,
+            "return_order_id_prompt",
+            "I could not find a recent order on this WhatsApp number. Please share your order ID, like #5967.",
+        ),
+    )
+    return True
 
 
 async def _send_return_item_or_reason_list(context: WebhookProcessingContext) -> bool:
     state = _return_flow_state(context)
     order_id = state.get("order_id")
     order = find_order_for_customer(context.db, context.phone, order_id, tenant_id=context.tenant_id) if order_id else None
+    if order_id and not order:
+        await _send_text(
+            context,
+            _flow_text(
+                context,
+                "return_order_not_found",
+                "I could not find order {order_id}. Please check the order ID or share another one.",
+                order_id=order_id,
+            ),
+        )
+        return True
     items = _order_items(order) if order else []
     if len(items) <= 1:
         return await _send_return_reason_list(context)
@@ -548,7 +569,79 @@ def _is_return_confirmation_no(text: str) -> bool:
 
 
 def _is_return_outcome(text: str) -> bool:
-    return text in {"return:refund", "return:exchange", "return:credit"}
+    return text in {"return:refund", "refund", "return:exchange", "exchange", "return:credit", "store credit"}
+
+
+def _is_manual_return_order_id(context: WebhookProcessingContext, text: str) -> bool:
+    return _looks_like_order_id(text) and _latest_return_context_active(context)
+
+
+def _looks_like_order_id(text: str) -> bool:
+    return bool(re.fullmatch(r"#?[A-Za-z0-9][A-Za-z0-9-]{2,}", text or ""))
+
+
+def _message_is_in_return_context(context: WebhookProcessingContext, message_id: int) -> bool:
+    row = context.db.execute(
+        select(Message)
+        .where(
+            Message.tenant_id == context.tenant_id,
+            Message.phone == context.phone,
+            Message.direction == "outgoing",
+            Message.message_type.in_(["buttons", "list"]),
+            Message.payload.is_not(None),
+            Message.id < message_id,
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    ).scalars().first()
+    if not row:
+        return False
+    if not row.payload:
+        return _looks_like_return_prompt(row.message)
+    try:
+        payload = json.loads(row.payload)
+    except json.JSONDecodeError:
+        return _looks_like_return_prompt(row.message)
+    title = str(payload.get("title") or "").strip().lower() if isinstance(payload, dict) else ""
+    return title in {"return reasons", "return orders", "return", "reason"} or _looks_like_return_prompt(row.message)
+
+
+def _latest_return_context_active(context: WebhookProcessingContext) -> bool:
+    row = context.db.execute(
+        select(Message)
+        .where(
+            Message.tenant_id == context.tenant_id,
+            Message.phone == context.phone,
+            Message.direction == "outgoing",
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    ).scalars().first()
+    if not row:
+        return False
+    if _looks_like_return_prompt(row.message):
+        return True
+    if not row.payload:
+        return False
+    try:
+        payload = json.loads(row.payload)
+    except json.JSONDecodeError:
+        return False
+    title = str(payload.get("title") or "").strip().lower() if isinstance(payload, dict) else ""
+    return title in {"return reasons", "return orders", "return", "reason"}
+
+
+def _looks_like_return_prompt(message: str | None) -> bool:
+    lowered = str(message or "").lower()
+    return (
+        "return" in lowered
+        and (
+            "order id" in lowered
+            or "which order" in lowered
+            or "recent order" in lowered
+            or "share your order" in lowered
+        )
+    )
 
 
 def _is_gifting_timeline(text: str) -> bool:
@@ -624,6 +717,8 @@ def _return_flow_state(context: WebhookProcessingContext) -> dict:
             if len(parts) >= 3:
                 state["order_id"] = parts[1].strip()
                 state["item_ids"] = [parts[2].strip()]
+        elif _looks_like_order_id(text) and _message_is_in_return_context(context, row.id):
+            state["order_id"] = text.strip().lstrip("#")
         elif _is_return_reason(lowered):
             state["reason"] = _return_reason_label(lowered)
         elif _is_return_outcome(lowered):
@@ -665,8 +760,11 @@ def _return_reason_label(text: str) -> str:
 def _return_outcome_label(text: str) -> str:
     labels = {
         "return:refund": "Refund",
+        "refund": "Refund",
         "return:exchange": "Exchange",
+        "exchange": "Exchange",
         "return:credit": "Store credit",
+        "store credit": "Store credit",
     }
     return labels.get(text, text)
 

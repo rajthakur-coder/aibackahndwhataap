@@ -161,6 +161,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 
 from app.db.session import Base
+import app.db.base  # noqa: F401 - populate Base.metadata before create_all
 
 
 REQUIRED_COLUMNS: dict[str, dict[str, str]] = {

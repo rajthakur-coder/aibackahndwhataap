@@ -93,16 +93,21 @@ async def _send_ai_reply(context: WebhookProcessingContext) -> None:
                 ai_reply = orchestrator_response.reply
                 _log_orchestrator_result(context, orchestrator_response)
         except Exception as exc:
-            context.db.add(
-                AgentAction(
-                    phone=context.phone,
-                    action_type="ai_reply_failed_fallback_used",
-                    status="failed",
-                    payload=json.dumps({"message": context.text}),
-                    result=json.dumps({"error": str(exc)}),
+            context.db.rollback()
+            try:
+                context.db.add(
+                    AgentAction(
+                        tenant_id=context.tenant_id,
+                        phone=context.phone,
+                        action_type="ai_reply_failed_fallback_used",
+                        status="failed",
+                        payload=json.dumps({"message": context.text}),
+                        result=json.dumps({"error": str(exc)}),
+                    )
                 )
-            )
-            context.db.commit()
+                context.db.commit()
+            except Exception:
+                context.db.rollback()
             ai_reply = context.bot_settings.fallback_message or (
                 "I do not have that information right now. I can connect you with our support team."
             )

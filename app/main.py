@@ -28,6 +28,7 @@ from app.modules.whatsapp.live_chat.live_chat_router import websocket_router as 
 from app.modules.whatsapp.whatsapp_router import whatsapp_router
 from app.modules.whatsapp.webhooks.routing.webhook_router import whatsapp_webhook_router
 from app.shared.arq_queue import close_arq_pools
+from app.shared.lifecycle import initialize_database
 from app.shared.logging import setup_logging
 from app.shared.redis import close_redis
 
@@ -50,6 +51,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
+    await initialize_database()
     app.state.arq_pool = await create_pool(
         RedisSettings.from_dsn(settings.REDIS_URL),
         default_queue_name=settings.ARQ_QUEUE_NAME,
