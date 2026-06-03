@@ -174,6 +174,8 @@ def _register_phone_number(phone_number_id: str, token: str) -> None:
     data = {"messaging_product": "whatsapp"}
     register_pin = str(settings.WHATSAPP_REGISTER_PIN or "").strip()
     if register_pin:
+        if not re.fullmatch(r"\d{6}", register_pin):
+            raise RuntimeError("WHATSAPP_REGISTER_PIN must be exactly 6 digits")
         data["pin"] = register_pin
 
     _post_graph(
@@ -250,7 +252,20 @@ def _parse_graph_response(response: requests.Response) -> dict:
         body = {"message": response.text}
 
     if not 200 <= response.status_code < 300:
-        message = body.get("error", {}).get("message") if isinstance(body, dict) else None
+        error = body.get("error", {}) if isinstance(body, dict) else {}
+        message = error.get("message") if isinstance(error, dict) else None
+        if isinstance(error, dict):
+            details = []
+            if error.get("type"):
+                details.append(f"type={error.get('type')}")
+            if error.get("code"):
+                details.append(f"code={error.get('code')}")
+            if error.get("error_subcode"):
+                details.append(f"subcode={error.get('error_subcode')}")
+            if error.get("error_data"):
+                details.append(f"error_data={error.get('error_data')}")
+            if details and message:
+                message = f"{message} ({'; '.join(details)})"
         raise RuntimeError(message or f"Meta API request failed with {response.status_code}")
     if not isinstance(body, dict):
         return {"data": body}
