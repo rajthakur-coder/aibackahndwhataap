@@ -72,6 +72,10 @@ async def _handle_commerce_interactive_flows(context: WebhookProcessingContext) 
         return await _send_return_item_or_reason_list(context)
     if _is_return_item_selection(text):
         return await _send_return_reason_list(context)
+    if _is_return_reason(text):
+        return await _send_return_outcome_buttons(context)
+    if _is_return_outcome(text):
+        return await _send_return_confirmation(context)
     if _is_manual_return_order_id(context, text):
         return await _send_return_item_or_reason_list(context)
     if _is_return_request(text):
@@ -90,8 +94,6 @@ async def _handle_commerce_interactive_flows(context: WebhookProcessingContext) 
         return True
     if _is_gifting_request(text):
         return await _send_gifting_list(context)
-    if _is_return_reason(text):
-        return await _send_return_outcome_buttons(context)
     if _is_gifting_occasion(text):
         return await _send_gifting_quantity_buttons(context)
     if _is_gifting_quantity(text):
@@ -100,8 +102,6 @@ async def _handle_commerce_interactive_flows(context: WebhookProcessingContext) 
         return await _send_gifting_email_prompt(context)
     if _is_gifting_contact_response(context, text):
         return await _send_gifting_contact_ack(context)
-    if _is_return_outcome(text):
-        return await _send_return_confirmation(context)
     return False
 
 
@@ -589,7 +589,12 @@ def _is_manual_return_order_id(context: WebhookProcessingContext, text: str) -> 
 
 
 def _looks_like_order_id(text: str) -> bool:
-    return bool(re.fullmatch(r"#?[A-Za-z0-9][A-Za-z0-9-]{2,}", text or ""))
+    value = str(text or "").strip()
+    clean_value = value.lstrip("#")
+    return bool(
+        re.fullmatch(r"#?[A-Za-z0-9][A-Za-z0-9-]{2,}", value)
+        and any(char.isdigit() for char in clean_value)
+    )
 
 
 def _extract_return_order_id(text: str) -> str | None:
