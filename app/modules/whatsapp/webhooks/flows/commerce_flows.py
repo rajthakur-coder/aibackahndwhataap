@@ -53,6 +53,11 @@ GIFTING_ROWS = [
     {"id": "gift:hospitality", "title": "Hospitality", "description": "Hotel or restaurant"},
     {"id": "gift:personal", "title": "Large order", "description": "Personal large order"},
 ]
+RETURN_ORDER_RE = re.compile(
+    r"\b(?:return|exchange)\b.*?(?:order|ord|invoice|booking)\s*(?:id|number|no)?\s*(?:#|:|-)?\s*([A-Za-z0-9][A-Za-z0-9-]{2,})\b"
+    r"|\b(?:return|exchange)\b.*?#([A-Za-z0-9][A-Za-z0-9-]{2,})\b",
+    re.I,
+)
 
 
 async def _handle_commerce_interactive_flows(context: WebhookProcessingContext) -> bool:
@@ -221,6 +226,9 @@ async def _send_order_status(context: WebhookProcessingContext, data: dict) -> N
 
 
 async def _send_return_order_or_reason_list(context: WebhookProcessingContext) -> bool:
+    if _return_flow_state(context).get("order_id"):
+        return await _send_return_item_or_reason_list(context)
+
     orders = list_recent_orders_for_customer(context.db, context.phone, limit=3, tenant_id=context.tenant_id)
     if orders:
         rows = [
@@ -243,7 +251,7 @@ async def _send_return_order_or_reason_list(context: WebhookProcessingContext) -
         _flow_text(
             context,
             "return_order_id_prompt",
-            "I could not find a recent order on this WhatsApp number. Please share your order ID, like #5967.",
+            "I could not find a recent order on this WhatsApp number. Please share your order ID, like #1234.",
         ),
     )
     return True
@@ -511,7 +519,11 @@ def _is_track_request(text: str) -> bool:
 
 
 def _is_return_request(text: str) -> bool:
-    return text in {"return / exchange", "return / exchanges", "return", "exchange"} or text.startswith("return_order:")
+    return (
+        text in {"return / exchange", "return / exchanges", "return", "exchange"}
+        or text.startswith("return_order:")
+        or (("return" in text or "exchange" in text) and bool(_extract_return_order_id(text)))
+    )
 
 
 def _is_return_order_selection(text: str) -> bool:
@@ -580,6 +592,14 @@ def _looks_like_order_id(text: str) -> bool:
     return bool(re.fullmatch(r"#?[A-Za-z0-9][A-Za-z0-9-]{2,}", text or ""))
 
 
+def _extract_return_order_id(text: str) -> str | None:
+    match = RETURN_ORDER_RE.search(text or "")
+    if not match:
+        return None
+    value = next((group for group in match.groups() if group), None)
+    return value.strip().lstrip("#").upper() if value else None
+
+
 def _message_is_in_return_context(context: WebhookProcessingContext, message_id: int) -> bool:
     row = context.db.execute(
         select(Message)
@@ -633,6 +653,8 @@ def _latest_return_context_active(context: WebhookProcessingContext) -> bool:
 
 def _looks_like_return_prompt(message: str | None) -> bool:
     lowered = str(message or "").lower()
+    if "could not find a recent order" in lowered and "share your order id" in lowered:
+        return True
     return (
         "return" in lowered
         and (
@@ -719,6 +741,8 @@ def _return_flow_state(context: WebhookProcessingContext) -> dict:
                 state["item_ids"] = [parts[2].strip()]
         elif _looks_like_order_id(text) and _message_is_in_return_context(context, row.id):
             state["order_id"] = text.strip().lstrip("#")
+        elif ("return" in lowered or "exchange" in lowered) and _extract_return_order_id(text):
+            state["order_id"] = _extract_return_order_id(text)
         elif _is_return_reason(lowered):
             state["reason"] = _return_reason_label(lowered)
         elif _is_return_outcome(lowered):
