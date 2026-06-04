@@ -69,6 +69,8 @@ async def _handle_commerce_interactive_flows(context: WebhookProcessingContext) 
         return await _send_shop_list(context)
     if _is_track_request(text):
         return await _send_track_status_or_prompt(context)
+    if _is_manual_track_order_id(context, text):
+        return await _send_track_status_or_prompt(context)
     if _is_return_order_selection(text):
         return await _send_return_item_or_reason_list(context)
     if _is_return_item_selection(text):
@@ -594,7 +596,12 @@ def _is_shop_request(text: str) -> bool:
 
 
 def _is_track_request(text: str) -> bool:
-    return text in {"track order", "track", "order status", "menu:order_status"}
+    if text in {"track order", "track", "order status", "menu:order_status"}:
+        return True
+    return bool(
+        re.search(r"\btrack(?:ing)?\b.*\border\b", text)
+        or re.search(r"\border\b.*\b(?:status|track(?:ing)?)\b", text)
+    )
 
 
 def _is_return_request(text: str) -> bool:
@@ -668,7 +675,15 @@ def _is_return_outcome(text: str) -> bool:
 
 
 def _is_manual_return_order_id(context: WebhookProcessingContext, text: str) -> bool:
-    return _looks_like_order_id(text) and (_latest_return_context_active(context) or _latest_return_session_active(context))
+    return (
+        _looks_like_order_id(text)
+        and not _latest_track_context_active(context)
+        and (_latest_return_context_active(context) or _latest_return_session_active(context))
+    )
+
+
+def _is_manual_track_order_id(context: WebhookProcessingContext, text: str) -> bool:
+    return _looks_like_order_id(text) and _latest_track_context_active(context)
 
 
 def _looks_like_order_id(text: str) -> bool:
@@ -846,6 +861,22 @@ def _latest_return_context_active(context: WebhookProcessingContext) -> bool:
     return title in {"return reasons", "return orders", "return items", "return outcome", "confirm return", "return", "reason"}
 
 
+def _latest_track_context_active(context: WebhookProcessingContext) -> bool:
+    row = context.db.execute(
+        select(Message)
+        .where(
+            Message.tenant_id == context.tenant_id,
+            Message.phone == context.phone,
+            Message.direction == "outgoing",
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    ).scalars().first()
+    if not row:
+        return False
+    return _looks_like_track_prompt(row.message)
+
+
 def _latest_return_session_active(context: WebhookProcessingContext) -> bool:
     rows = context.db.execute(
         select(Message)
@@ -877,6 +908,19 @@ def _looks_like_return_prompt(message: str | None) -> bool:
             or "which order" in lowered
             or "recent order" in lowered
             or "share your order" in lowered
+        )
+    )
+
+
+def _looks_like_track_prompt(message: str | None) -> bool:
+    lowered = str(message or "").lower()
+    return (
+        "order id" in lowered
+        and (
+            "track" in lowered
+            or "status" in lowered
+            or "phone used for the order" in lowered
+            or "drop your order id" in lowered
         )
     )
 
