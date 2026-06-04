@@ -1,7 +1,6 @@
 import requests
 
-from app.config import settings
-from app.modules.whatsapp.analytics.analytics_service import tracking_url
+from app.modules.whatsapp.client.credentials import resolve_whatsapp_client_credentials
 
 
 WHATSAPP_API_VERSION = "v25.0"
@@ -15,18 +14,14 @@ def send_whatsapp_template(
     body_parameters: list[str] | None = None,
     button_url_parameters: list[str] | None = None,
 ) -> dict:
-    access_token = settings.ACCESS_TOKEN
-    phone_number_id = settings.PHONE_NUMBER_ID
-
-    if not access_token or not phone_number_id:
-        raise RuntimeError("WhatsApp credentials are not configured")
+    credentials = resolve_whatsapp_client_credentials()
 
     if not phone or not template_name:
         raise ValueError("Phone and template name are required")
 
     url = (
         f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/"
-        f"{phone_number_id}/messages"
+        f"{credentials.phone_number_id}/messages"
     )
 
     template = {
@@ -63,7 +58,7 @@ def send_whatsapp_template(
     response = requests.post(
         url,
         headers={
-            "Authorization": f"Bearer {access_token}",
+            "Authorization": f"Bearer {credentials.access_token}",
             "Content-Type": "application/json",
         },
         json=payload,

@@ -4,6 +4,7 @@ import requests
 
 from app.config import settings
 from app.modules.whatsapp.analytics.analytics_service import tracking_url
+from app.modules.whatsapp.client.credentials import resolve_whatsapp_client_credentials
 
 
 WHATSAPP_API_VERSION = "v25.0"
@@ -18,12 +19,9 @@ def send_whatsapp_product_list(
     section_title: str = "Recommended",
     footer_text: str | None = None,
 ) -> dict:
-    access_token = settings.ACCESS_TOKEN
-    phone_number_id = settings.PHONE_NUMBER_ID
+    credentials = resolve_whatsapp_client_credentials()
     catalog_id = settings.WHATSAPP_CATALOG_ID
 
-    if not access_token or not phone_number_id:
-        raise RuntimeError("WhatsApp credentials are not configured")
     if not catalog_id:
         raise RuntimeError("WhatsApp catalog ID is not configured")
     if not phone:
@@ -40,7 +38,7 @@ def send_whatsapp_product_list(
 
     url = (
         f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/"
-        f"{phone_number_id}/messages"
+        f"{credentials.phone_number_id}/messages"
     )
 
     interactive = {
@@ -70,7 +68,7 @@ def send_whatsapp_product_list(
     response = requests.post(
         url,
         headers={
-            "Authorization": f"Bearer {access_token}",
+            "Authorization": f"Bearer {credentials.access_token}",
             "Content-Type": "application/json",
         },
         json=payload,
@@ -85,11 +83,8 @@ def send_whatsapp_carousel(
     body_text: str,
     button_text: str = "Buy now",
 ) -> dict:
-    access_token = settings.ACCESS_TOKEN
-    phone_number_id = settings.PHONE_NUMBER_ID
+    credentials = resolve_whatsapp_client_credentials()
 
-    if not access_token or not phone_number_id:
-        raise RuntimeError("WhatsApp credentials are not configured")
     if not phone:
         raise ValueError("Phone is required")
 
@@ -140,7 +135,7 @@ def send_whatsapp_carousel(
 
     url = (
         f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/"
-        f"{phone_number_id}/messages"
+        f"{credentials.phone_number_id}/messages"
     )
 
     payload = {
@@ -158,7 +153,7 @@ def send_whatsapp_carousel(
     response = requests.post(
         url,
         headers={
-            "Authorization": f"Bearer {access_token}",
+            "Authorization": f"Bearer {credentials.access_token}",
             "Content-Type": "application/json",
         },
         json=payload,
@@ -202,11 +197,8 @@ def send_whatsapp_cta_url(
     image_url: str | None = None,
     footer_text: str | None = None,
 ) -> dict:
-    access_token = settings.ACCESS_TOKEN
-    phone_number_id = settings.PHONE_NUMBER_ID
+    credentials = resolve_whatsapp_client_credentials()
 
-    if not access_token or not phone_number_id:
-        raise RuntimeError("WhatsApp credentials are not configured")
     if not phone or not body_text or not button_text or not button_url:
         raise ValueError("Phone, body text, button text, and button URL are required")
     tracked_button_url = tracking_url(
@@ -242,7 +234,7 @@ def send_whatsapp_cta_url(
 
     url = (
         f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/"
-        f"{phone_number_id}/messages"
+        f"{credentials.phone_number_id}/messages"
     )
     payload = {
         "messaging_product": "whatsapp",
@@ -255,7 +247,7 @@ def send_whatsapp_cta_url(
     response = requests.post(
         url,
         headers={
-            "Authorization": f"Bearer {access_token}",
+            "Authorization": f"Bearer {credentials.access_token}",
             "Content-Type": "application/json",
         },
         json=payload,
@@ -273,11 +265,8 @@ def send_whatsapp_list(
     section_title: str = "Options",
     footer_text: str | None = None,
 ) -> dict:
-    access_token = settings.ACCESS_TOKEN
-    phone_number_id = settings.PHONE_NUMBER_ID
+    credentials = resolve_whatsapp_client_credentials()
 
-    if not access_token or not phone_number_id:
-        raise RuntimeError("WhatsApp credentials are not configured")
     if not phone or not body_text or not button_text or not rows:
         raise ValueError("Phone, body text, button text, and rows are required")
 
@@ -322,7 +311,7 @@ def send_whatsapp_list(
 
     url = (
         f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/"
-        f"{phone_number_id}/messages"
+        f"{credentials.phone_number_id}/messages"
     )
     payload = {
         "messaging_product": "whatsapp",
@@ -335,7 +324,7 @@ def send_whatsapp_list(
     response = requests.post(
         url,
         headers={
-            "Authorization": f"Bearer {access_token}",
+            "Authorization": f"Bearer {credentials.access_token}",
             "Content-Type": "application/json",
         },
         json=payload,
@@ -352,11 +341,8 @@ def send_whatsapp_reply_buttons(
     footer_text: str | None = None,
     image_url: str | None = None,
 ) -> dict:
-    access_token = settings.ACCESS_TOKEN
-    phone_number_id = settings.PHONE_NUMBER_ID
+    credentials = resolve_whatsapp_client_credentials()
 
-    if not access_token or not phone_number_id:
-        raise RuntimeError("WhatsApp credentials are not configured")
     if not phone or not body_text or not buttons:
         raise ValueError("Phone, body text, and buttons are required")
 
@@ -399,7 +385,7 @@ def send_whatsapp_reply_buttons(
 
     url = (
         f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/"
-        f"{phone_number_id}/messages"
+        f"{credentials.phone_number_id}/messages"
     )
     payload = {
         "messaging_product": "whatsapp",
@@ -412,7 +398,7 @@ def send_whatsapp_reply_buttons(
     response = requests.post(
         url,
         headers={
-            "Authorization": f"Bearer {access_token}",
+            "Authorization": f"Bearer {credentials.access_token}",
             "Content-Type": "application/json",
         },
         json=payload,
