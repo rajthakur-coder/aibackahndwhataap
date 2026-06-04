@@ -1131,7 +1131,7 @@ def _first_time_offer_text(context: WebhookProcessingContext) -> str:
     return _flow_text(
         context,
         "first_time_offer_no_code",
-        "First time at {brand_name}. Welcome.\n\nWant to see best sellers or browse the catalog?",
+        "Welcome to {brand_name}.\n\nYou can explore our best sellers or browse the full catalog.",
         brand_name=brand_name,
     )
 

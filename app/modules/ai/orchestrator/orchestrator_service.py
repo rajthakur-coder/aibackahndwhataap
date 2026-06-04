@@ -185,6 +185,12 @@ def _run_selected_tool(
 
 
 def _deterministic_reply(tool_result: ToolCallResult) -> str | None:
+    if tool_result.tool_name == "add_to_cart" and tool_result.status == "success":
+        items = tool_result.data.get("items") if isinstance(tool_result.data, dict) else []
+        item = items[-1] if isinstance(items, list) and items else {}
+        title = item.get("title") if isinstance(item, dict) else None
+        return f"Added {title} to your cart." if title else "Added to your cart."
+
     if tool_result.tool_name != "get_order_status" or tool_result.status != "success":
         return None
     if not isinstance(tool_result.data, dict):

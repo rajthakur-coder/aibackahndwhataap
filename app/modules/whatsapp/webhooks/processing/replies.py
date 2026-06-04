@@ -144,13 +144,39 @@ async def _send_post_tool_interactive(context: WebhookProcessingContext, orchest
                 tenant_id=context.tenant_id,
             )
             recommendations = bundle_result.data.get("recommendations") if isinstance(bundle_result.data, dict) else []
-            await send_bundle_push(context, recommendations or [])
+            if await send_bundle_push(context, recommendations or []):
+                return
         except Exception:
             pass
+        await _send_cart_ready_buttons(context, data)
         return
     if tool_name == "get_bundle_recommendations" and isinstance(data, dict):
         recommendations = data.get("recommendations") or []
         await send_bundle_push(context, recommendations)
+
+
+async def _send_cart_ready_buttons(context: WebhookProcessingContext, data: dict) -> None:
+    items = data.get("items") if isinstance(data, dict) else []
+    item = items[-1] if isinstance(items, list) and items else {}
+    title = item.get("title") if isinstance(item, dict) else None
+    body = f"Added {title} to your cart." if title else "Added to your cart."
+    body += "\n\nWould you like to checkout now?"
+    buttons = [
+        {"id": "checkout:start", "title": "Checkout"},
+        {"id": "menu:catalog", "title": "Browse more"},
+    ]
+    try:
+        await run_in_threadpool(send_whatsapp_reply_buttons, context.phone, body, buttons, "Cart")
+        save_message(
+            context.db,
+            context.phone,
+            "[buttons] Cart ready",
+            "outgoing",
+            message_type="buttons",
+            payload={"title": "Cart", "body": body, "buttons": buttons},
+        )
+    except Exception:
+        await _send_text_reply(context, body)
 
 def _log_orchestrator_result(context: WebhookProcessingContext, orchestrator_response) -> None:
     context.db.add(
