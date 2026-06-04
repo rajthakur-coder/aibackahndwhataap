@@ -112,7 +112,24 @@ async def process_webhook_event(event: WebhookEvent, db: Session) -> None:
         return
 
     with timing.stage("whatsapp_typing"):
-        start_mark_read_with_typing(event)
+        typing_handle = start_mark_read_with_typing(event)
+
+    try:
+        await _process_webhook_event_with_typing(event, db, phone, text, timing, tenant_id, bot_settings)
+    finally:
+        if typing_handle:
+            typing_handle.stop()
+
+
+async def _process_webhook_event_with_typing(
+    event: WebhookEvent,
+    db: Session,
+    phone: str,
+    text: str,
+    timing: WebhookTiming,
+    tenant_id: str,
+    bot_settings: object,
+) -> None:
 
     if await _handle_active_handoff(db, event, phone, text, bot_settings, timing):
         _mark_processed(db, event, timing)

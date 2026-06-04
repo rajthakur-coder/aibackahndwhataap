@@ -1,6 +1,6 @@
 import json
 import threading
-from concurrent.futures import TimeoutError, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 from app.db.session import SessionLocal
 from app.models.crm import AgentAction
@@ -11,6 +11,32 @@ from app.modules.whatsapp.client.client_service import mark_whatsapp_message_rea
 
 
 _BACKGROUND_LOG_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="whatsapp-log")
+
+
+class TypingIndicatorHandle:
+    def __init__(self, message_id: str, phone: str | None, interval_seconds: float = 12.0):
+        self.message_id = message_id
+        self.phone = phone
+        self.interval_seconds = interval_seconds
+        self._first_attempt = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self, wait_seconds: float) -> "TypingIndicatorHandle":
+        self._thread.start()
+        self._first_attempt.wait(timeout=wait_seconds)
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            success = _mark_read_with_typing_worker(self.message_id, self.phone)
+            self._first_attempt.set()
+            if not success:
+                return
+            self._stop.wait(self.interval_seconds)
 
 
 def _run_sync_db_in_thread(sync_op) -> None:
@@ -116,19 +142,16 @@ def _log_query_understanding_worker(phone: str, payload: dict) -> None:
     _run_sync_db_in_thread(sync_op)
 
 
-def start_mark_read_with_typing(event: WebhookEvent, wait_seconds: float = 0.8) -> None:
+def start_mark_read_with_typing(event: WebhookEvent, wait_seconds: float = 0.8) -> TypingIndicatorHandle | None:
     if not event.external_id:
-        return
-    future = _BACKGROUND_LOG_EXECUTOR.submit(_mark_read_with_typing_worker, event.external_id, event.phone)
-    try:
-        future.result(timeout=wait_seconds)
-    except TimeoutError:
-        return
+        return None
+    return TypingIndicatorHandle(event.external_id, event.phone).start(wait_seconds)
 
 
-def _mark_read_with_typing_worker(message_id: str, phone: str | None) -> None:
+def _mark_read_with_typing_worker(message_id: str, phone: str | None) -> bool:
     try:
         mark_whatsapp_message_read_with_typing(message_id)
+        return True
     except Exception as exc:
         def sync_op(db):
             db.add(
@@ -142,3 +165,4 @@ def _mark_read_with_typing_worker(message_id: str, phone: str | None) -> None:
             )
             db.commit()
         _run_sync_db_in_thread(sync_op)
+        return False

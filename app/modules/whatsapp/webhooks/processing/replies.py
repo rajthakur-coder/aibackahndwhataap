@@ -48,9 +48,10 @@ from app.modules.whatsapp.webhooks.responses.response_service import (
     try_send_product_carousel as _try_send_product_carousel,
     try_send_product_cta as _try_send_product_cta,
     try_send_product_list as _try_send_product_list,
+    send_cross_sell_products as _send_cross_sell_products,
     understanding_context as _understanding_context,
 )
-from app.shared.arq_queue import enqueue_whatsapp_cross_sell, enqueue_whatsapp_product_images
+from app.shared.arq_queue import enqueue_whatsapp_product_images
 from app.modules.ai.understanding.query_understanding_service import understand_message
 from app.modules.ai.recommendations.sales_recommendations_service import (
     is_top_selling_request,
@@ -277,7 +278,7 @@ def _product_cards_payload(products: list[dict]) -> list[dict]:
         cards.append(
             {
                 "title": product.get("title") or "Product",
-                "price": product.get("price") or product.get("price_min") or product.get("price_max") or "",
+                "price": product.get("price_min") or product.get("price") or product.get("price_max") or "",
                 "image_url": product.get("image_url"),
                 "product_url": product.get("product_url"),
                 "caption": product.get("caption") or product.get("description") or "",
@@ -294,12 +295,12 @@ async def _queue_cross_sell_products(
     if not base_products:
         return
     try:
-        await enqueue_whatsapp_cross_sell(phone, text, base_products)
+        await _send_cross_sell_products(db, phone, text, base_products)
     except Exception as exc:
         db.add(
             AgentAction(
                 phone=phone,
-                action_type="cross_sell_enqueue_failed",
+                action_type="cross_sell_send_failed",
                 status="failed",
                 payload=json.dumps({"base_product_count": len(base_products)}),
                 result=json.dumps({"error": str(exc)}),

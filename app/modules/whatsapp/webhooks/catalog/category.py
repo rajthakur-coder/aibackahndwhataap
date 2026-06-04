@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from dataclasses import dataclass
@@ -201,7 +200,6 @@ async def _send_more_category_button_after_carousel_if_needed(
 ) -> None:
     if not has_more_category_products:
         return
-    await asyncio.sleep(1.5)
     await _send_more_category_button_if_needed(
         context,
         selected_catalog_category,

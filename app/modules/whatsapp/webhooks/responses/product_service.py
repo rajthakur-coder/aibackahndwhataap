@@ -127,7 +127,7 @@ async def try_send_product_cta(
         return False
 
     title = str(product.get("title") or "Product").strip()
-    price = str(product.get("price") or product.get("price_min") or "").strip()
+    price = str(product.get("price_min") or product.get("price") or "").strip()
     body_parts = [title]
     if price:
         body_parts.append(f"Price: {price}")

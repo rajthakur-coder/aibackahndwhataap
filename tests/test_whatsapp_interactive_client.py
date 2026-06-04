@@ -32,6 +32,7 @@ def test_carousel_sends_up_to_ten_cards(monkeypatch):
             "image_url": f"https://example.com/product-{index}.jpg",
             "product_url": f"https://example.com/product-{index}",
             "price_min": "999",
+            "price": "999 - 2499",
         }
         for index in range(12)
     ]
@@ -41,4 +42,6 @@ def test_carousel_sends_up_to_ten_cards(monkeypatch):
     cards = captured["payload"]["interactive"]["action"]["cards"]
     assert len(cards) == 10
     assert cards[0]["card_index"] == 0
+    assert "Price: 999" in cards[0]["body"]["text"]
+    assert "999 - 2499" not in cards[0]["body"]["text"]
     assert cards[-1]["card_index"] == 9

@@ -101,7 +101,7 @@ def send_whatsapp_carousel(
             continue
 
         title = str(product.get("title") or "Product").strip()
-        price = str(product.get("price") or product.get("price_min") or "").strip()
+        price = str(product.get("price_min") or product.get("price") or "").strip()
         body_parts = [f"*{title[:80]}*"]
         if price:
             body_parts.append(f"Price: {price}")
