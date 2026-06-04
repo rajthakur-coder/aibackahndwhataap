@@ -214,20 +214,14 @@ async def _send_track_status_or_prompt(context: WebhookProcessingContext) -> boo
 
 
 async def _send_order_status(context: WebhookProcessingContext, data: dict) -> None:
-    items = data.get("items") or []
-    item_count = len(items) if isinstance(items, list) else 0
-    lines = [
-        f"Order {data.get('order_number') or data.get('id')} · {item_count or 'your'} item{'s' if item_count != 1 else ''}",
-        "",
-        f"Status: {data.get('delivery_status') or data.get('shipment_status') or data.get('fulfillment_status') or data.get('status') or 'Received'}",
-    ]
-    if data.get("courier_company"):
-        lines.append(f"Courier: {data.get('courier_company')}")
+    order_number = data.get("order_number") or data.get("id")
+    status = data.get("delivery_status") or data.get("shipment_status") or data.get("fulfillment_status") or data.get("status") or "received"
+    parts = [f"Your order {order_number} status is {str(status).lower()}."]
     if data.get("tracking_number"):
-        lines.append(f"AWB: {data.get('tracking_number')}")
+        parts.append(f"Tracking number: {data.get('tracking_number')}.")
     if data.get("tracking_url"):
-        lines.append(f"Tracking: {data.get('tracking_url')}")
-    await _send_text(context, "\n".join(lines[:6]))
+        parts.append(f"Track here: {data.get('tracking_url')}")
+    await _send_text(context, " ".join(parts))
 
 
 async def _send_return_order_or_reason_list(context: WebhookProcessingContext) -> bool:

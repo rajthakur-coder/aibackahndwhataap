@@ -1,7 +1,7 @@
 import asyncio
 import json
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError, ThreadPoolExecutor
 
 from app.db.session import AsyncSessionLocal
 from app.models.crm import AgentAction
@@ -121,15 +121,14 @@ def _log_query_understanding_worker(phone: str, payload: dict) -> None:
     _run_sync_db_in_thread(sync_op)
 
 
-def start_mark_read_with_typing(event: WebhookEvent) -> None:
+def start_mark_read_with_typing(event: WebhookEvent, wait_seconds: float = 0.8) -> None:
     if not event.external_id:
         return
-    thread = threading.Thread(
-        target=_mark_read_with_typing_worker,
-        args=(event.external_id, event.phone),
-        daemon=True,
-    )
-    thread.start()
+    future = _BACKGROUND_LOG_EXECUTOR.submit(_mark_read_with_typing_worker, event.external_id, event.phone)
+    try:
+        future.result(timeout=wait_seconds)
+    except TimeoutError:
+        return
 
 
 def _mark_read_with_typing_worker(message_id: str, phone: str | None) -> None:
