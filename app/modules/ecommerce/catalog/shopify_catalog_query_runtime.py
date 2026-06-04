@@ -203,7 +203,7 @@ async def find_cached_cross_sell_products(
 
 async def find_cached_top_selling_products(
     db: Session,
-    limit: int = 3,
+    limit: int = 10,
     phone: str | None = None,
 ) -> list[dict]:
     connection = _active_shopify_connection(db, phone=phone)

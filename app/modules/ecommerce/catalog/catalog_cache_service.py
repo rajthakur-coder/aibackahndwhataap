@@ -188,7 +188,7 @@ async def find_cached_cross_sell_products(
     )
 
 
-async def find_cached_top_selling_products(db: Session, limit: int = 5, phone: str | None = None) -> list[dict]:
+async def find_cached_top_selling_products(db: Session, limit: int = 10, phone: str | None = None) -> list[dict]:
     if _has_active_shopify_connection(db, phone):
         shopify_catalog = _shopify_catalog_runtime()
         return await shopify_catalog.find_cached_top_selling_products(db, limit=limit, phone=phone)

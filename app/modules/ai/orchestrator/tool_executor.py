@@ -228,11 +228,12 @@ def _search_catalog(
     entities: dict,
     tenant_id: str,
 ) -> ToolCallResult:
-    limit = _limit(entities.get("limit"), default=5)
     query = _catalog_query(message, entities)
     if _is_top_selling_query(query):
+        limit = _limit(entities.get("limit"), default=10)
         products = find_top_selling_products(db, limit=limit, tenant_id=tenant_id)
     else:
+        limit = _limit(entities.get("limit"), default=5)
         products = find_product_recommendations(db, query, limit=limit, tenant_id=tenant_id)
     if not products:
         products = _db_product_search(db, query, tenant_id, limit)

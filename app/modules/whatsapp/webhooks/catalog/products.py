@@ -85,10 +85,11 @@ from app.modules.whatsapp.webhooks.catalog.category import *
 async def _handle_top_selling_products(context: WebhookProcessingContext) -> bool:
     if not is_top_selling_request(context.query_text) and context.understanding.intent != "top_selling_products":
         return False
+    top_selling_limit = max(context.requested_limit, 10)
     with context.timing.stage("shopify_top_selling_fetch"):
         top_selling_products = await find_cached_top_selling_products(
             context.db,
-            limit=context.requested_limit,
+            limit=top_selling_limit,
             phone=context.phone,
         )
     if not top_selling_products:
@@ -106,8 +107,6 @@ async def _handle_top_selling_products(context: WebhookProcessingContext) -> boo
         "These are the top-selling products.",
         "Ye top-selling products hain.",
     )
-    if await _send_product_carousel_reply(context, top_selling_products, body_text, "[carousel] Top selling products"):
-        return True
     if await _send_product_list_reply(
         context,
         top_selling_products,
@@ -115,6 +114,8 @@ async def _handle_top_selling_products(context: WebhookProcessingContext) -> boo
         body_text,
         "[product_list] Top selling products",
     ):
+        return True
+    if await _send_product_carousel_reply(context, top_selling_products, body_text, "[carousel] Top selling products"):
         return True
 
     recommendation_text = recommendation_intro(context.text, top_selling_products)

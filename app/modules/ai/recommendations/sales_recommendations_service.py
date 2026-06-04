@@ -110,7 +110,7 @@ def extract_requested_limit(query: str, default: int = 3) -> int:
     return default
 
 
-def find_top_selling_products(db: Session, limit: int = 2, tenant_id: str | None = None) -> list[dict]:
+def find_top_selling_products(db: Session, limit: int = 10, tenant_id: str | None = None) -> list[dict]:
     query = select(EcommerceOrder).order_by(EcommerceOrder.updated_at.desc()).limit(1000)
     if tenant_id:
         query = (
