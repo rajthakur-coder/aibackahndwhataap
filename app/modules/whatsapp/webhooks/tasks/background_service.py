@@ -1,9 +1,8 @@
-import asyncio
 import json
 import threading
 from concurrent.futures import TimeoutError, ThreadPoolExecutor
 
-from app.db.session import AsyncSessionLocal
+from app.db.session import SessionLocal
 from app.models.crm import AgentAction
 from app.models.whatsapp import WebhookEvent
 from app.modules.crm.memory.conversation_memory_service import remember_last_question
@@ -14,13 +13,9 @@ from app.modules.whatsapp.client.client_service import mark_whatsapp_message_rea
 _BACKGROUND_LOG_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="whatsapp-log")
 
 
-async def _run_sync_db(sync_op) -> None:
-    async with AsyncSessionLocal() as db:
-        await db.run_sync(sync_op)
-
-
 def _run_sync_db_in_thread(sync_op) -> None:
-    asyncio.run(_run_sync_db(sync_op))
+    with SessionLocal() as db:
+        sync_op(db)
 
 
 def start_remember_last_question(phone: str, text: str, tenant_id: str | None = None) -> None:

@@ -127,7 +127,7 @@ def send_whatsapp_carousel(
                 },
             }
         )
-        if len(cards) >= 3:
+        if len(cards) >= 10:
             break
 
     if len(cards) < 2:
