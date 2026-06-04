@@ -31,8 +31,6 @@ def test_greeting_uses_no_structured_tool():
 
 
 def test_commerce_action_messages_select_commerce_tools():
-    assert _select_tool("search_products", "catalog_request", 0.8, "add this to cart") == "add_to_cart"
-    assert _select_tool("search_knowledge", "general", 0.8, "send checkout link") == "generate_checkout_link"
     assert _select_tool("search_knowledge", "general", 0.8, "return eligibility for order #HS-1") == "get_return_eligibility"
     assert _select_tool("search_knowledge", "general", 0.8, "bulk gifting for 100 people") == "log_bulk_lead"
     assert _select_tool("search_knowledge", "general", 0.8, "apply discount FIRST10") == "apply_discount"

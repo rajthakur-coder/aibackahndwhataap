@@ -33,62 +33,6 @@ def _session():
     return SessionLocal()
 
 
-def test_add_to_cart_creates_recoverable_cart():
-    db = _session()
-    db.add(
-        EcommerceProduct(
-            tenant_id="brand-a",
-            connection_id=1,
-            platform="shopify",
-            external_id="p1",
-            title="Linen Throw",
-            sku="LINEN-1",
-            price_min="1999",
-        )
-    )
-    db.commit()
-
-    result = execute_tool(
-        db,
-        "add_to_cart",
-        phone="919999999999",
-        message="add linen throw to cart",
-        entities={"sku": "LINEN-1", "qty": 2},
-        tenant_id="brand-a",
-    )
-
-    cart = db.query(EcommerceCart).one()
-    assert result.status == "success"
-    assert result.data["cart_id"] == cart.id
-    assert "Linen Throw" in cart.items
-    assert db.query(AutomationEvent).count() == 1
-
-
-def test_checkout_without_adapter_keeps_cart_saved():
-    db = _session()
-    cart = EcommerceCart(
-        tenant_id="brand-a",
-        phone="919999999999",
-        status="open",
-        items='[{"title": "Linen Throw", "qty": 1}]',
-    )
-    db.add(cart)
-    db.commit()
-
-    result = execute_tool(
-        db,
-        "generate_checkout_link",
-        phone="919999999999",
-        message="checkout",
-        entities={"cart_id": cart.id},
-        tenant_id="brand-a",
-    )
-
-    assert result.status == "needs_integration"
-    assert result.data["cart_id"] == cart.id
-    assert db.get(EcommerceCart, cart.id).status == "checkout_pending"
-
-
 def test_apply_discount_uses_tenant_rules():
     db = _session()
     db.add(
@@ -113,51 +57,6 @@ def test_apply_discount_uses_tenant_rules():
     cart = db.query(EcommerceCart).one()
     assert result.status == "success"
     assert "FIRST10" in cart.metadata_json
-
-
-def test_checkout_creates_shopify_draft_order(monkeypatch):
-    db = _session()
-    connection = EcommerceConnection(
-        tenant_id="brand-a",
-        name="Shopify",
-        platform="shopify",
-        store_url="brand.myshopify.com",
-        myshopify_domain="brand.myshopify.com",
-        access_token="token",
-        status="active",
-    )
-    db.add(connection)
-    db.add(
-        EcommerceCart(
-            tenant_id="brand-a",
-            phone="919999999999",
-            status="open",
-            items='[{"title": "Linen Throw", "qty": 1, "variant_id": "123"}]',
-        )
-    )
-    db.commit()
-
-    def fake_create_draft_order(self, items, customer):
-        return {"id": 999, "invoice_url": "https://checkout.example/invoice/999", "line_items": items}
-
-    monkeypatch.setattr(
-        "app.modules.headless.oms_adapter.ShopifyOMSAdapter.create_draft_order",
-        fake_create_draft_order,
-    )
-
-    result = execute_tool(
-        db,
-        "generate_checkout_link",
-        phone="919999999999",
-        message="checkout",
-        entities={},
-        tenant_id="brand-a",
-    )
-
-    cart = db.query(EcommerceCart).one()
-    assert result.status == "success"
-    assert result.data["checkout_url"] == "https://checkout.example/invoice/999"
-    assert cart.status == "checkout_ready"
 
 
 def test_return_eligibility_uses_delivered_order_window():

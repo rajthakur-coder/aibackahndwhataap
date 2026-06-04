@@ -31,7 +31,6 @@ from app.modules.integrations.notification_service import notify_bulk_lead, noti
 from app.modules.headless.custom_tool_service import execute_custom_tool, get_custom_tool
 from app.modules.headless.oms_adapter import oms_adapter_registry
 from app.modules.knowledge.knowledge_service import knowledge_context
-from app.modules.automation.events.order_event_service import create_abandoned_cart_event
 from app.shared.tenant import DEFAULT_TENANT_ID, normalize_tenant_id
 
 
@@ -96,8 +95,6 @@ def execute_tool(
         "get_policy": _get_policy,
         "get_bundle_recommendations": _get_bundle_recommendations,
         "create_support_ticket": _create_support_ticket,
-        "add_to_cart": _add_to_cart,
-        "generate_checkout_link": _generate_checkout_link,
         "apply_discount": _apply_discount,
         "get_return_eligibility": _get_return_eligibility,
         "initiate_return": _initiate_return,
@@ -357,117 +354,6 @@ def _create_support_ticket(
         "success",
         f"I logged this as ticket #{ticket.id}. The team can follow up asynchronously.",
         {"ticket_id": ticket.id, "status": ticket.status, "email": email},
-    )
-
-
-def _add_to_cart(
-    db: Session,
-    *,
-    phone: str,
-    message: str,
-    entities: dict,
-    tenant_id: str,
-) -> ToolCallResult:
-    qty = _limit(entities.get("qty") or entities.get("quantity"), default=1)
-    product = _find_product(db, str(entities.get("sku") or entities.get("query") or message), tenant_id)
-    if not product:
-        return ToolCallResult("add_to_cart", "needs_input", "Which product should I add to cart?", {"query": message})
-
-    cart = _open_cart(db, phone, tenant_id)
-    items = _json_loads(cart.items, [])
-    product_payload = _product_dict(product)
-    item_key = product_payload.get("sku") or product_payload.get("external_id") or product_payload.get("title")
-    existing = next((item for item in items if item.get("key") == item_key), None)
-    if existing:
-        existing["qty"] = int(existing.get("qty") or 0) + qty
-    else:
-        items.append(
-            {
-                "key": item_key,
-                "sku": product_payload.get("sku"),
-                "external_id": product_payload.get("external_id"),
-                "title": product_payload.get("title"),
-                "qty": qty,
-                "price": product_payload.get("price_min") or product_payload.get("price_max"),
-                "product_url": product_payload.get("product_url"),
-            }
-        )
-    cart.items = _json_dumps(items)
-    cart.currency = product_payload.get("currency") or cart.currency
-    cart.status = "open"
-    db.commit()
-    db.refresh(cart)
-    _queue_abandoned_cart_recovery(db, cart, tenant_id)
-    return ToolCallResult(
-        "add_to_cart",
-        "success",
-        f"Added {product.title} to cart.",
-        {"cart_id": cart.id, "items": items, "checkout_ready": bool(cart.checkout_url)},
-    )
-
-
-def _generate_checkout_link(
-    db: Session,
-    *,
-    phone: str,
-    message: str,
-    entities: dict,
-    tenant_id: str,
-) -> ToolCallResult:
-    cart = _cart_by_id(db, entities.get("cart_id"), tenant_id) if entities.get("cart_id") else _open_cart(db, phone, tenant_id)
-    items = _json_loads(cart.items, []) if cart else []
-    if not cart or not items:
-        return ToolCallResult("generate_checkout_link", "needs_input", "Your cart is empty. Which product should I add?", {})
-
-    checkout_url = str(entities.get("checkout_url") or cart.checkout_url or "").strip()
-    if checkout_url:
-        cart.checkout_url = checkout_url
-        cart.status = "checkout_ready"
-        db.commit()
-        return ToolCallResult(
-            "generate_checkout_link",
-            "success",
-            "Checkout link is ready.",
-            {"cart_id": cart.id, "checkout_url": checkout_url, "items": items},
-        )
-
-    connection = _active_oms_connection(db, tenant_id)
-    if not connection:
-        cart.status = "checkout_pending"
-        db.commit()
-        return ToolCallResult(
-            "generate_checkout_link",
-            "needs_integration",
-            "Cart is saved. Connect an OMS to generate a real checkout link.",
-            {"cart_id": cart.id, "items": items},
-        )
-
-    discount = _json_loads(cart.metadata_json, {}).get("discount")
-    adapter = oms_adapter_registry.for_connection(connection)
-    if not adapter:
-        cart.status = "checkout_pending"
-        db.commit()
-        return ToolCallResult("generate_checkout_link", "needs_integration", "Cart is saved. This OMS adapter is not available yet.", {"cart_id": cart.id, "items": items, "platform": connection.platform})
-
-    draft_order = adapter.create_draft_order(
-        items,
-        {
-            "phone": phone,
-            "email": entities.get("email"),
-            "discount": discount,
-            "note": f"WhatsApp cart #{cart.id}",
-        },
-    )
-    checkout_url = draft_order.get("invoice_url") or draft_order.get("checkout_url") or draft_order.get("payment_url") or draft_order.get("admin_graphql_api_id") or ""
-    cart.checkout_url = checkout_url
-    cart.status = "checkout_ready" if checkout_url else "checkout_pending"
-    cart.metadata_json = _json_dumps({**_json_loads(cart.metadata_json, {}), "oms_draft_order": draft_order, "oms_platform": connection.platform})
-    db.commit()
-    return ToolCallResult(
-        "generate_checkout_link",
-        "success" if checkout_url else "needs_integration",
-        "Checkout link is ready." if checkout_url else "Draft order created, but the OMS did not return a checkout URL.",
-        {"cart_id": cart.id, "checkout_url": checkout_url, "items": items, "draft_order_id": draft_order.get("id")},
     )
 
 
@@ -777,7 +663,7 @@ def _limit(value, default: int) -> int:
 def _open_cart(db: Session, phone: str, tenant_id: str) -> EcommerceCart:
     cart = db.execute(
         select(EcommerceCart)
-        .where(EcommerceCart.tenant_id == tenant_id, EcommerceCart.phone == phone, EcommerceCart.status.in_(("open", "checkout_pending")))
+        .where(EcommerceCart.tenant_id == tenant_id, EcommerceCart.phone == phone, EcommerceCart.status == "open")
         .order_by(EcommerceCart.updated_at.desc())
         .limit(1)
     ).scalars().first()
@@ -830,34 +716,6 @@ def _discount_for_oms(rule: dict) -> dict:
     if rule_type in {"fixed", "fixed_amount"}:
         return {"code": rule.get("code"), "type": "fixed_amount", "value_type": "fixed_amount", "value": rule.get("value")}
     return {"code": rule.get("code"), "type": rule_type, "value": rule.get("value")}
-
-
-def _queue_abandoned_cart_recovery(db: Session, cart: EcommerceCart, tenant_id: str) -> None:
-    try:
-        create_abandoned_cart_event(
-            db,
-            payload={
-                "external_id": f"whatsapp-cart:{cart.id}",
-                "cart_id": cart.id,
-                "phone": cart.phone,
-                "cart_url": cart.checkout_url or "",
-                "currency": cart.currency or "",
-                "items": _json_loads(cart.items, []),
-            },
-            source="whatsapp_ai_cart",
-        )
-    except Exception as exc:
-        db.add(
-            AgentAction(
-                tenant_id=tenant_id,
-                phone=cart.phone,
-                action_type="abandoned_cart_hook_failed",
-                status="failed",
-                payload=_json_dumps({"cart_id": cart.id, "tenant_id": tenant_id}),
-                result=_json_dumps({"error": str(exc)}),
-            )
-        )
-        db.commit()
 
 
 def _live_fulfillments(db: Session, order, tenant_id: str) -> list[dict]:

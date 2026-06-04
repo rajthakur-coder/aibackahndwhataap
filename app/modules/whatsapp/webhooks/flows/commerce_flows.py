@@ -10,7 +10,6 @@ from starlette.concurrency import run_in_threadpool
 from app.models.whatsapp import Message
 from app.modules.whatsapp.messages.messages_service import save_message
 from app.modules.whatsapp.client.interactive_client_service import (
-    send_whatsapp_cta_url,
     send_whatsapp_list,
     send_whatsapp_reply_buttons,
 )
@@ -334,7 +333,11 @@ async def _send_return_reason_list(context: WebhookProcessingContext, initial_st
             selection = _return_item_selection_from_text(context, current_text, latest_row.id)
             if selection:
                 state.update(selection)
-    body = _flow_text(context, "return_reason_prompt", "Sorry it did not work out. What went wrong?")
+    body = _flow_text(
+        context,
+        "return_reason_prompt",
+        "We're sorry the product wasn't the right fit for you. Please choose the reason for your return so we can assist you better.",
+    )
     try:
         await run_in_threadpool(
             send_whatsapp_list,
@@ -550,17 +553,6 @@ async def _send_gifting_contact_ack(context: WebhookProcessingContext) -> bool:
     return True
 
 
-async def send_checkout_cta(context: WebhookProcessingContext, checkout_url: str) -> bool:
-    body = _flow_text(context, "checkout_cta_message", "Cart ready. Tap to checkout.")
-    button_text = _flow_text(context, "checkout_cta_button", "Checkout")
-    try:
-        await run_in_threadpool(send_whatsapp_cta_url, context.phone, body, button_text[:20], checkout_url, button_text[:20])
-        save_message(context.db, context.phone, "[cta] Checkout", "outgoing", message_type="cta_url", payload={"title": button_text[:20], "body": body, "url": checkout_url})
-        return True
-    except Exception:
-        return False
-
-
 async def send_bundle_push(context: WebhookProcessingContext, products: list[dict]) -> bool:
     if not products:
         return False
@@ -575,7 +567,7 @@ async def send_bundle_push(context: WebhookProcessingContext, products: list[dic
     buttons = _flow_buttons(
         context,
         "bundle_push_buttons",
-        [{"id": "bundle:add", "title": "Add bundle"}, {"id": "bundle:skip", "title": "Just this"}, {"id": "checkout:start", "title": "Checkout"}],
+        [{"id": "bundle:add", "title": "Add bundle"}, {"id": "bundle:skip", "title": "Just this"}],
     )
     try:
         await run_in_threadpool(send_whatsapp_reply_buttons, context.phone, body, buttons, "Complete the set")
@@ -599,6 +591,8 @@ def _is_track_request(text: str) -> bool:
 
 
 def _is_return_request(text: str) -> bool:
+    if _is_return_policy_question(text):
+        return False
     return (
         text in {"return / exchange", "return / exchanges", "return", "exchange"}
         or text.startswith("return_order:")
@@ -668,6 +662,12 @@ def _is_return_outcome(text: str) -> bool:
     return text in {"return:refund", "refund", "return:exchange", "exchange", "return:credit", "store credit"}
 
 
+def _is_return_policy_question(text: str) -> bool:
+    return ("return" in text or "exchange" in text) and any(
+        term in text for term in ("policy", "terms", "term", "rule", "rules", "kitne din", "how many days")
+    )
+
+
 def _is_manual_return_order_id(context: WebhookProcessingContext, text: str) -> bool:
     return (
         _looks_like_order_id(text)
@@ -694,7 +694,12 @@ def _extract_return_order_id(text: str) -> str | None:
     if not match:
         return None
     value = next((group for group in match.groups() if group), None)
-    return value.strip().lstrip("#").upper() if value else None
+    if not value:
+        return None
+    clean_value = value.strip().lstrip("#")
+    if not any(char.isdigit() for char in clean_value):
+        return None
+    return clean_value.upper()
 
 
 def _message_is_in_return_context(context: WebhookProcessingContext, message_id: int) -> bool:
@@ -1017,6 +1022,8 @@ def _return_flow_state(context: WebhookProcessingContext) -> dict:
 
 
 def _is_return_flow_start_marker(text: str) -> bool:
+    if _is_return_policy_question(text):
+        return False
     return (
         text in {"return / exchange", "return / exchanges", "return"}
         or text.startswith("return_order:")
@@ -1142,4 +1149,4 @@ async def _send_text(context: WebhookProcessingContext, text: str) -> None:
     await _send_text_reply(context, text)
 
 
-__all__ = ["_handle_commerce_interactive_flows", "send_checkout_cta", "send_bundle_push"]
+__all__ = ["_handle_commerce_interactive_flows", "send_bundle_push"]

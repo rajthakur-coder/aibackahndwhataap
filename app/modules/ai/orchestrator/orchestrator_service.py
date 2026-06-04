@@ -136,14 +136,10 @@ def _commerce_action_tool(message: str) -> str | None:
         if any(term in lowered for term in ("initiate", "start", "process", "pickup", "refund")):
             return "initiate_return"
         return "get_return_eligibility"
-    if any(term in lowered for term in ("checkout", "payment link", "pay link", "buy now")):
-        return "generate_checkout_link"
     if any(term in lowered for term in ("tracking link", "track link", "live tracking")):
         return "get_tracking_link"
     if any(term in lowered for term in ("dispatch", "shipped", "shipment details", "awb")):
         return "get_dispatch_details"
-    if any(term in lowered for term in ("add to cart", "cart me", "cart mein", "add this", "add product")):
-        return "add_to_cart"
     return None
 
 
@@ -185,12 +181,6 @@ def _run_selected_tool(
 
 
 def _deterministic_reply(tool_result: ToolCallResult) -> str | None:
-    if tool_result.tool_name == "add_to_cart" and tool_result.status == "success":
-        items = tool_result.data.get("items") if isinstance(tool_result.data, dict) else []
-        item = items[-1] if isinstance(items, list) and items else {}
-        title = item.get("title") if isinstance(item, dict) else None
-        return f"Added {title} to your cart." if title else "Added to your cart."
-
     if tool_result.tool_name != "get_order_status" or tool_result.status != "success":
         return None
     if not isinstance(tool_result.data, dict):

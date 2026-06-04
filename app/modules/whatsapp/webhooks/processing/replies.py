@@ -15,7 +15,6 @@ from app.models.ecommerce import EcommerceConnection
 from app.models.whatsapp import WebhookEvent
 from app.modules.crm.agent.agent_service import bot_setting_enabled, get_bot_settings, process_agent_message
 from app.modules.ai.orchestrator import orchestrate_message
-from app.modules.ai.orchestrator.tool_executor import execute_tool
 from app.modules.automation.browse_event_service import create_browse_no_buy_event
 from app.modules.ai.tools.ai_tools_service import ToolDecision, decide_tool_for_message, run_ai_tool
 from app.modules.crm.memory.conversation_memory_service import remember_last_products
@@ -76,8 +75,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.modules.whatsapp.webhooks.processing.pipeline import WebhookProcessingContext
-from app.modules.whatsapp.webhooks.processing.state import _active_store_bot_enabled
-from app.modules.whatsapp.webhooks.flows.commerce_flows import send_bundle_push, send_checkout_cta
+from app.modules.whatsapp.webhooks.flows.commerce_flows import send_bundle_push
+
 
 async def _send_ai_reply(context: WebhookProcessingContext) -> None:
     ai_reply = context.agent_state["reply_override"]
@@ -130,53 +129,9 @@ async def _send_post_tool_interactive(context: WebhookProcessingContext, orchest
             except Exception:
                 pass
         return
-    if tool_name == "generate_checkout_link" and isinstance(data, dict) and data.get("checkout_url"):
-        await send_checkout_cta(context, data["checkout_url"])
-        return
-    if tool_name == "add_to_cart":
-        try:
-            bundle_result = execute_tool(
-                context.db,
-                "get_bundle_recommendations",
-                phone=context.phone,
-                message=context.text,
-                entities=getattr(context.understanding, "entities", {}),
-                tenant_id=context.tenant_id,
-            )
-            recommendations = bundle_result.data.get("recommendations") if isinstance(bundle_result.data, dict) else []
-            if await send_bundle_push(context, recommendations or []):
-                return
-        except Exception:
-            pass
-        await _send_cart_ready_buttons(context, data)
-        return
     if tool_name == "get_bundle_recommendations" and isinstance(data, dict):
         recommendations = data.get("recommendations") or []
         await send_bundle_push(context, recommendations)
-
-
-async def _send_cart_ready_buttons(context: WebhookProcessingContext, data: dict) -> None:
-    items = data.get("items") if isinstance(data, dict) else []
-    item = items[-1] if isinstance(items, list) and items else {}
-    title = item.get("title") if isinstance(item, dict) else None
-    body = f"Added {title} to your cart." if title else "Added to your cart."
-    body += "\n\nWould you like to checkout now?"
-    buttons = [
-        {"id": "checkout:start", "title": "Checkout"},
-        {"id": "menu:catalog", "title": "Browse more"},
-    ]
-    try:
-        await run_in_threadpool(send_whatsapp_reply_buttons, context.phone, body, buttons, "Cart")
-        save_message(
-            context.db,
-            context.phone,
-            "[buttons] Cart ready",
-            "outgoing",
-            message_type="buttons",
-            payload={"title": "Cart", "body": body, "buttons": buttons},
-        )
-    except Exception:
-        await _send_text_reply(context, body)
 
 def _log_orchestrator_result(context: WebhookProcessingContext, orchestrator_response) -> None:
     context.db.add(

@@ -101,7 +101,7 @@ def generate_ai_reply(
             f"{LENGTH_GUIDANCE.get(response_length, LENGTH_GUIDANCE['brief'])} "
             "Use only structured database/tool context when it is provided. "
             "Never invent product specs, stock, prices, discounts, return eligibility, warranty coverage, or delivery dates. "
-            "For order, return, catalog, policy, and checkout facts, rely only on the tool context. "
+            "For order, return, catalog, and policy facts, rely only on the tool context. "
             "Destructive actions require a confirmation result from the tool layer before you imply anything changed. "
             "Use customer memory and intent context to personalize the response. "
             "Ask for missing details when an action needs more information. "

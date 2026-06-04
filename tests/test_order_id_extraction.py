@@ -7,8 +7,10 @@ from app.modules.ai.orchestrator.tool_executor import _extract_order_id
 from app.modules.ai.understanding.query_understanding_service import understand_message
 from app.models.whatsapp import Message
 from app.modules.whatsapp.webhooks.flows.commerce_flows import (
+    _extract_return_order_id,
     _is_manual_return_order_id,
     _is_manual_track_order_id,
+    _is_return_request,
     _is_track_request,
 )
 
@@ -36,6 +38,13 @@ def test_order_id_extractor_accepts_bare_values():
 def test_track_request_accepts_order_id_in_same_message():
     assert _is_track_request("track order #5968") is True
     assert _is_track_request("order status #5968") is True
+
+
+def test_return_policy_does_not_become_return_order_id():
+    assert _extract_return_order_id("return policy kya ha") is None
+    assert _extract_return_order_id("exchange policy") is None
+    assert _is_return_request("return policy kya ha") is False
+    assert _is_return_request("exchange policy") is False
 
 
 def test_bare_order_id_after_track_prompt_is_not_return_order_id():

@@ -60,18 +60,6 @@ TOOLS: dict[str, ToolDefinition] = {
         description="Create an async support ticket with issue and conversation context.",
         input_schema={"issue": "string", "conversation_history": "string", "email": "string|null"},
     ),
-    "add_to_cart": ToolDefinition(
-        name="add_to_cart",
-        description="Add a product to a recoverable WhatsApp cart draft.",
-        input_schema={"sku": "string|null", "query": "string|null", "qty": "integer"},
-        tenant_required_integrations=("catalog",),
-    ),
-    "generate_checkout_link": ToolDefinition(
-        name="generate_checkout_link",
-        description="Generate or retrieve checkout details for a cart draft.",
-        input_schema={"cart_id": "integer|null", "user_phone": "string"},
-        tenant_required_integrations=("oms",),
-    ),
     "apply_discount": ToolDefinition(
         name="apply_discount",
         description="Apply a configured discount code to a cart draft.",
@@ -104,7 +92,6 @@ LEGACY_TOOL_ALIASES = {
     "get_policy_or_faq": "get_policy",
     "search_knowledge": "get_policy",
     "get_services": "get_policy",
-    "checkout": "generate_checkout_link",
     "return_eligibility": "get_return_eligibility",
     "bulk_lead": "log_bulk_lead",
     "tracking": "get_tracking_link",
