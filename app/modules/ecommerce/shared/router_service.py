@@ -96,7 +96,7 @@ def shopify_collection_rows(connection: EcommerceConnection) -> list[dict]:
     in_stock_product_ids = {
         str(normalized.get("shopify_product_id") or normalized.get("external_id") or "")
         for normalized in (_normalize_product(connection, product) for product in products)
-        if normalized.get("status") == "active" and normalized.get("in_stock")
+        if normalized.get("status") == "active" and (normalized.get("stock_quantity") or 0) > 0
     }
     counts: dict[str, int] = {}
     for collect in collects:
