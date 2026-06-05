@@ -50,10 +50,13 @@ class AutomationEventRequest(BaseModel):
 
 class AbandonedCartRequest(BaseModel):
     phone: str
+    email: str | None = None
     cart_url: str | None = None
     customer_name: str | None = None
     total: str | None = None
     currency: str | None = None
     items: list[dict] = Field(default_factory=list)
     external_id: str | None = None
+    checkout_created_at: str | None = None
+    checkout_updated_at: str | None = None
     delay_seconds: int = 0

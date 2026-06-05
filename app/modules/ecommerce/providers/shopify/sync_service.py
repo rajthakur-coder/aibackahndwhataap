@@ -44,6 +44,7 @@ def sync_abandoned_checkouts(db: Session, connection: EcommerceConnection, limit
     skipped = 0
     for checkout in checkouts:
         payload = _abandoned_checkout_payload(checkout)
+        payload["tenant_id"] = connection.tenant_id
         if not payload.get("phone"):
             skipped += 1
             continue
@@ -71,11 +72,14 @@ def _abandoned_checkout_payload(checkout: dict) -> dict:
         or shipping.get("phone")
         or billing.get("phone")
         or customer.get("phone"),
+        "email": checkout.get("email") or customer.get("email"),
         "customer_name": " ".join([first, last]).strip() or customer.get("email") or "there",
         "cart_url": checkout.get("abandoned_checkout_url") or checkout.get("cart_url") or checkout.get("web_url") or "",
         "total": str(checkout.get("total_price") or checkout.get("total") or ""),
         "currency": checkout.get("currency") or "",
         "items": checkout.get("line_items") or checkout.get("items") or [],
+        "checkout_created_at": checkout.get("created_at"),
+        "checkout_updated_at": checkout.get("updated_at"),
     }
 
 def _int_value(value) -> int:

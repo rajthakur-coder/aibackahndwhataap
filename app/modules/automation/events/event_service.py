@@ -1,5 +1,7 @@
 import json
-from datetime import datetime, timedelta
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +14,7 @@ from app.models.automation import (
     MessageTemplate,
 )
 from app.models.crm import AgentAction
+from app.models.ecommerce import EcommerceOrder
 from app.models.whatsapp import Message
 from app.modules.automation.automation_schema import (
     AbandonedCartRequest,
@@ -79,10 +82,13 @@ async def create_abandoned_cart_event(db: AsyncSession, data: AbandonedCartReque
         payload={
             "customer_name": payload.get("customer_name") or "there",
             "phone": payload.get("phone"),
+            "email": payload.get("email"),
             "cart_url": payload.get("cart_url") or "",
             "total": payload.get("total") or "",
             "currency": payload.get("currency") or "",
             "items": payload.get("items") or [],
+            "checkout_created_at": payload.get("checkout_created_at"),
+            "checkout_updated_at": payload.get("checkout_updated_at"),
         },
         delay_seconds=data.delay_seconds,
     )
@@ -97,7 +103,7 @@ async def _create_event(
     external_id: str | None = None,
     delay_seconds: int = 0,
 ) -> AutomationEvent:
-    tenant_id = normalize_tenant_id(current_tenant_id() or DEFAULT_TENANT_ID)
+    tenant_id = normalize_tenant_id(payload.get("tenant_id") or current_tenant_id() or DEFAULT_TENANT_ID)
     if external_id:
         result = await db.execute(
             select(AutomationEvent)
@@ -200,6 +206,22 @@ async def _process_event(db: AsyncSession, event: AutomationEvent) -> dict:
     if not payload.get("cart_token"):
         payload["cart_token"] = payload.get("external_id") or str(payload.get("cart_url") or "").rstrip("/").rsplit("/", 1)[-1]
 
+    if await _abandoned_cart_was_converted(db, event, payload):
+        event.status = "processed"
+        event.processed_at = datetime.utcnow()
+        event.error = "Skipped abandoned cart reminder because this customer placed an order."
+        await db.commit()
+        return {
+            "status": "skipped",
+            "event_id": event.id,
+            "reason": "abandoned_cart_converted",
+            "sent": 0,
+            "failed": 0,
+            "skipped": 1,
+            "pending_delayed": 0,
+            "errors": [],
+        }
+
     result = await db.execute(
         select(AutomationRule)
         .where(AutomationRule.tenant_id == event.tenant_id, AutomationRule.trigger == event.trigger)
@@ -223,6 +245,7 @@ async def _process_event(db: AsyncSession, event: AutomationEvent) -> dict:
     for rule in rules:
         existing = await db.execute(
             select(AutomationExecution).where(
+                AutomationExecution.tenant_id == event.tenant_id,
                 AutomationExecution.event_id == event.id,
                 AutomationExecution.rule_id == rule.id,
             )
@@ -307,6 +330,94 @@ async def _process_event(db: AsyncSession, event: AutomationEvent) -> dict:
         "pending_delayed": pending_delayed,
         "errors": errors[:5],
     }
+
+async def _abandoned_cart_was_converted(db: AsyncSession, event: AutomationEvent, payload: dict) -> bool:
+    if event.trigger != TRIGGER_CART_ABANDONED:
+        return False
+
+    phone_digits = _digits(event.phone or payload.get("phone"))
+    email = _clean_email(payload.get("email"))
+    if not phone_digits and not email:
+        return False
+
+    cutoff = _event_cutoff(event, payload)
+    result = await db.execute(
+        select(EcommerceOrder)
+        .where(EcommerceOrder.tenant_id == event.tenant_id)
+        .order_by(EcommerceOrder.updated_at.desc(), EcommerceOrder.id.desc())
+        .limit(300)
+    )
+    for order in result.scalars().all():
+        if not _same_customer_order(order, phone_digits, email):
+            continue
+        if not _order_after_cutoff(order, cutoff):
+            continue
+        if _order_is_cancelled(order):
+            continue
+        return True
+    return False
+
+def _same_customer_order(order: EcommerceOrder, phone_digits: str, email: str) -> bool:
+    if phone_digits and _digits(order.phone) == phone_digits:
+        return True
+    return bool(email and _clean_email(order.email) == email)
+
+def _order_after_cutoff(order: EcommerceOrder, cutoff: datetime | None) -> bool:
+    if cutoff is None:
+        return True
+    order_times = [
+        _parse_datetime(order.shopify_created_at),
+        _normalize_datetime(order.created_at),
+    ]
+    return any(value and value >= cutoff for value in order_times)
+
+def _event_cutoff(event: AutomationEvent, payload: dict) -> datetime | None:
+    for key in ("checkout_created_at", "created_at", "checkout_updated_at"):
+        value = _parse_datetime(payload.get(key))
+        if value:
+            return value
+    return _normalize_datetime(event.created_at)
+
+def _order_is_cancelled(order: EcommerceOrder) -> bool:
+    status_text = " ".join(
+        str(value or "").lower()
+        for value in [
+            order.status,
+            order.financial_status,
+            order.fulfillment_status,
+            order.delivery_status,
+            order.raw_payload,
+        ]
+    )
+    return any(marker in status_text for marker in ("cancelled", "canceled", "voided", "refunded"))
+
+def _clean_email(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+def _digits(value: Any) -> str:
+    return re.sub(r"\D+", "", str(value or ""))
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return _normalize_datetime(value)
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return _normalize_datetime(datetime.fromisoformat(text))
+    except ValueError:
+        return None
+
+def _normalize_datetime(value: datetime | None) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
 
 __all__ = [
     "create_automation_event",

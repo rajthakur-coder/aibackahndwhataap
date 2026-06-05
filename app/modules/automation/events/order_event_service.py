@@ -170,6 +170,7 @@ def _first_order_item(order: EcommerceOrder) -> str:
 
 def order_payload(order: EcommerceOrder) -> dict:
     return {
+        "tenant_id": order.tenant_id,
         "order_id": order.external_id,
         "order_number": order.order_number,
         "phone": order.phone,
@@ -239,6 +240,7 @@ def create_abandoned_cart_event(
         external_id=payload.get("external_id") or payload.get("checkout_id") or payload.get("cart_id"),
         phone=payload.get("phone"),
         payload={
+            "tenant_id": payload.get("tenant_id"),
             "customer_name": payload.get("customer_name") or payload.get("name") or "there",
             "phone": payload.get("phone"),
             "cart_url": payload.get("cart_url") or payload.get("abandoned_checkout_url") or "",

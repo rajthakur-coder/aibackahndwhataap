@@ -198,7 +198,7 @@ def handle_ecommerce_order_webhook(db: Session, connection_id: int, body: dict) 
 
 
 def handle_abandoned_cart_webhook(db: Session, connection_id: int, body: dict) -> dict:
-    connection_or_404(db, connection_id)
+    connection = connection_or_404(db, connection_id)
     checkout = body.get("checkout") if isinstance(body, dict) and isinstance(body.get("checkout"), dict) else body
     if not isinstance(checkout, dict):
         raise HTTPException(status_code=400, detail="Invalid abandoned cart payload")
@@ -220,13 +220,17 @@ def handle_abandoned_cart_webhook(db: Session, connection_id: int, body: dict) -
         if value
     ).strip()
     payload = {
+        "tenant_id": connection.tenant_id,
         "external_id": str(checkout.get("id") or checkout.get("token") or ""),
         "phone": phone,
+        "email": checkout.get("email") or customer.get("email"),
         "customer_name": customer_name or customer.get("name") or "there",
         "cart_url": checkout.get("abandoned_checkout_url") or checkout.get("cart_url") or checkout.get("web_url") or "",
         "total": str(checkout.get("total_price") or checkout.get("total") or ""),
         "currency": checkout.get("currency") or "",
         "items": checkout.get("line_items") or checkout.get("items") or [],
+        "checkout_created_at": checkout.get("created_at"),
+        "checkout_updated_at": checkout.get("updated_at"),
     }
     if not payload["phone"]:
         raise HTTPException(status_code=400, detail="Abandoned cart phone is required")
