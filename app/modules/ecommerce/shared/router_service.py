@@ -24,6 +24,7 @@ from app.modules.ecommerce.shared.core_service import (
     set_shopify_webhook_request_id,
     verify_shopify_hmac,
 )
+from app.modules.ecommerce.catalog.shopify_catalog_text_runtime import _is_clean_category_label
 from app.modules.ecommerce.shared.serializers import serialize_ecommerce_connection
 from app.modules.ecommerce.orders.order_service import upsert_contact_store_mapping
 from app.shared.redis import get_redis
@@ -111,13 +112,16 @@ def shopify_collection_rows(connection: EcommerceConnection) -> list[dict]:
         collection_id = str(collection.get("id") or "")
         if not collection_id:
             continue
+        title = str(collection.get("title") or collection.get("handle") or collection_id)
+        if not _is_clean_category_label(title, set()):
+            continue
         product_count = counts.get(collection_id, 0)
         if product_count <= 0:
             continue
         rows.append(
             {
                 "shopify_collection_id": collection_id,
-                "title": collection.get("title") or collection.get("handle") or collection_id,
+                "title": title,
                 "handle": collection.get("handle"),
                 "product_count": product_count,
             }
