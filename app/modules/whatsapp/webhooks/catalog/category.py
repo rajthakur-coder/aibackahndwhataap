@@ -115,7 +115,7 @@ async def _handle_catalog_category(context: WebhookProcessingContext) -> bool:
         return True
 
     remember_last_products(context.db, context.phone, category_products)
-    label = _catalog_category_label(selected_catalog_category)
+    label = _catalog_category_label(selected_catalog_category, context.query_text)
     body_text = _localized(
         context.reply_language,
         f"You can browse {label} products.",
@@ -148,14 +148,31 @@ async def _handle_catalog_category(context: WebhookProcessingContext) -> bool:
     await _send_text_reply(context, fallback_text)
     return True
 
-def _catalog_category_label(selected_catalog_category: str) -> str:
+def _catalog_category_label(selected_catalog_category: str, query_text: str | None = None) -> str:
+    clicked_title = _catalog_category_clicked_title(selected_catalog_category, query_text)
+    if clicked_title:
+        return clicked_title
     label_key = selected_catalog_category.removeprefix("dynamic:")
     if label_key.startswith("collection_"):
         label_key = label_key.removeprefix("collection_")
+    label_key = re.sub(r"_\d+$", "", label_key)
     return _CATALOG_CATEGORY_LABELS.get(
         selected_catalog_category,
         _CATALOG_CATEGORY_LABELS.get(label_key, label_key.replace("_", " ").title()),
     )
+
+def _catalog_category_clicked_title(selected_catalog_category: str, query_text: str | None = None) -> str | None:
+    normalized = " ".join((query_text or "").split())
+    if not normalized:
+        return None
+    category_key = selected_catalog_category.removeprefix("dynamic:")
+    match = re.search(rf"\bcatalog (?:dynamic )?category {re.escape(category_key)}\s+(.+)$", normalized, re.I)
+    if not match:
+        return None
+    title = match.group(1).strip()
+    if re.search(r"\bpage\s+\d+\b", title, re.I):
+        return None
+    return title or None
 
 async def _send_more_category_button_if_needed(
     context: WebhookProcessingContext,

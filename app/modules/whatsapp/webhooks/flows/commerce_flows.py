@@ -69,6 +69,8 @@ async def _handle_commerce_interactive_flows(context: WebhookProcessingContext) 
         return await _send_track_status_or_prompt(context)
     if _is_manual_track_order_id(context, text):
         return await _send_track_status_or_prompt(context)
+    if _is_bare_order_id_without_context(context, text):
+        return await _send_order_action_choice(context, text)
     if _is_return_order_selection(text):
         return await _send_return_item_or_reason_list(context)
     if _is_return_item_selection(text):
@@ -200,12 +202,18 @@ async def _send_shop_list(context: WebhookProcessingContext) -> bool:
 
 
 async def _send_track_status_or_prompt(context: WebhookProcessingContext) -> bool:
+    message = context.query_text
+    entities = dict(getattr(context.understanding, "entities", {}) or {})
+    action_order_id = _extract_track_order_action_id(message)
+    if action_order_id:
+        message = f"track order #{action_order_id}"
+        entities.setdefault("order_id", action_order_id)
     result = execute_tool(
         context.db,
         "get_order_status",
         phone=context.phone,
-        message=context.query_text,
-        entities=getattr(context.understanding, "entities", {}),
+        message=message,
+        entities=entities,
         tenant_id=context.tenant_id,
     )
     if result.status == "success" and isinstance(result.data, dict):
@@ -213,8 +221,8 @@ async def _send_track_status_or_prompt(context: WebhookProcessingContext) -> boo
             context.db,
             "get_dispatch_details",
             phone=context.phone,
-            message=context.query_text,
-            entities=getattr(context.understanding, "entities", {}),
+            message=message,
+            entities=entities,
             tenant_id=context.tenant_id,
         )
         dispatch_data = dispatch.data if dispatch.status == "success" and isinstance(dispatch.data, dict) else {}
@@ -227,6 +235,34 @@ async def _send_track_status_or_prompt(context: WebhookProcessingContext) -> boo
     )
     await _send_text(context, body)
     return True
+
+
+async def _send_order_action_choice(context: WebhookProcessingContext, text: str) -> bool:
+    order_id = str(text or "").strip().lstrip("#").upper()
+    body = _flow_text(
+        context,
+        "order_action_choice_prompt",
+        "What would you like to do with order #{order_id}?",
+        order_id=order_id,
+    )
+    buttons = [
+        {"id": f"order_action:track:{order_id}", "title": "Track order"},
+        {"id": f"order_action:return:{order_id}", "title": "Return / Exchange"},
+    ]
+    try:
+        await run_in_threadpool(send_whatsapp_reply_buttons, context.phone, body, buttons, "Order")
+        save_message(
+            context.db,
+            context.phone,
+            "[buttons] Order action",
+            "outgoing",
+            message_type="buttons",
+            payload={"title": "Order action", "body": body, "buttons": buttons, "order_id": order_id},
+        )
+        return True
+    except Exception:
+        await _send_text(context, body)
+        return True
 
 
 async def _send_order_status(context: WebhookProcessingContext, data: dict) -> None:
@@ -757,6 +793,15 @@ def _is_manual_track_order_id(context: WebhookProcessingContext, text: str) -> b
     return _looks_like_order_id(text) and _latest_track_context_active(context)
 
 
+def _is_bare_order_id_without_context(context: WebhookProcessingContext, text: str) -> bool:
+    return (
+        _looks_like_order_id(text)
+        and not _latest_track_context_active(context)
+        and not _latest_return_context_active(context)
+        and not _latest_return_session_active(context)
+    )
+
+
 def _looks_like_order_id(text: str) -> bool:
     value = str(text or "").strip()
     clean_value = value.lstrip("#")
@@ -764,6 +809,11 @@ def _looks_like_order_id(text: str) -> bool:
         re.fullmatch(r"#?[A-Za-z0-9][A-Za-z0-9-]{2,}", value)
         and any(char.isdigit() for char in clean_value)
     )
+
+
+def _extract_track_order_action_id(text: str) -> str | None:
+    match = re.search(r"\btrack\s+order\s+#?([A-Za-z0-9][A-Za-z0-9-]{2,})\b", str(text or ""), re.I)
+    return match.group(1).strip().upper() if match else None
 
 
 def _extract_return_order_id(text: str) -> str | None:
