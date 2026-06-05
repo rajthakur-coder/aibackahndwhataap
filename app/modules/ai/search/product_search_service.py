@@ -127,6 +127,10 @@ def product_search_text(product) -> str:
             product.get("tags"),
             product.get("product_type"),
             product.get("sku"),
+            product.get("skus"),
+            product.get("options"),
+            product.get("variants"),
+            product.get("variant_search_text"),
         ]
     else:
         values = [
@@ -138,10 +142,22 @@ def product_search_text(product) -> str:
             getattr(product, "collections", None),
             getattr(product, "sku", None),
             getattr(product, "skus", None),
+            getattr(product, "options", None),
+            getattr(product, "variants", None),
             getattr(product, "seo_title", None),
             getattr(product, "seo_description", None),
         ]
-    return " ".join(str(value or "") for value in values)
+    return " ".join(_flatten_search_value(value) for value in values)
+
+
+def _flatten_search_value(value) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, dict):
+        return " ".join(_flatten_search_value(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(_flatten_search_value(item) for item in value)
+    return str(value)
 
 
 def _tokens(text: str) -> list[str]:

@@ -96,6 +96,8 @@ DEFAULT_CATALOG_CATEGORY_ROWS = [
 
 def _product_result(product: dict) -> dict:
     image_urls = product.get("image_urls") or []
+    variants = _compact_variants(product.get("variants") or [])
+    options = product.get("options") or []
     return {
         "source": "shopify_api",
         "title": product.get("title"),
@@ -111,6 +113,10 @@ def _product_result(product: dict) -> dict:
         "image_url": image_urls[0] if image_urls else None,
         "caption": _product_caption(product, image_urls),
         "sku": product.get("sku"),
+        "skus": product.get("skus") or [],
+        "options": options,
+        "variants": variants,
+        "variant_search_text": _variant_search_text(product, variants, options),
         "external_id": product.get("external_id"),
         "shopify_product_id": product.get("shopify_product_id"),
         "retailer_id": _first_retailer_id(product),
@@ -118,6 +124,51 @@ def _product_result(product: dict) -> dict:
         "stock_quantity": product.get("stock_quantity"),
         "availability_label": product.get("availability_label"),
     }
+
+def _compact_variants(variants: list[dict]) -> list[dict]:
+    compact = []
+    for variant in variants[:50]:
+        if not isinstance(variant, dict):
+            continue
+        compact.append(
+            {
+                "id": variant.get("id"),
+                "title": variant.get("title"),
+                "sku": variant.get("sku"),
+                "price": variant.get("price"),
+                "option1": variant.get("option1"),
+                "option2": variant.get("option2"),
+                "option3": variant.get("option3"),
+                "inventory_quantity": variant.get("inventory_quantity"),
+            }
+        )
+    return compact
+
+def _variant_search_text(product: dict, variants: list[dict], options: list[dict]) -> str:
+    values = []
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        values.append(option.get("name"))
+        option_values = option.get("values")
+        if isinstance(option_values, list):
+            values.extend(option_values)
+        elif option_values:
+            values.append(option_values)
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        values.extend(
+            [
+                variant.get("title"),
+                variant.get("sku"),
+                variant.get("option1"),
+                variant.get("option2"),
+                variant.get("option3"),
+            ]
+        )
+    values.extend(product.get("skus") or [])
+    return " ".join(str(value or "") for value in values)
 
 def _price_range(product: dict) -> str:
     price_min = product.get("price_min") or ""
@@ -159,7 +210,7 @@ async def _cached_all_shopify_products(db: Session, phone: str | None = None) ->
     if not connection:
         return []
 
-    cache_key = f"shopify:products:all:v2:{connection.id}"
+    cache_key = f"shopify:products:all:v3:{connection.id}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list):
         return cached
@@ -471,7 +522,7 @@ def _query_cache_key(
     if isinstance(entities, dict) and entities:
         entity_part = json.dumps(entities, sort_keys=True, ensure_ascii=True)[:240]
     flags = f"limit:{limit}:image:{int(require_image)}:fallback:{int(allow_fallback)}"
-    return f"shopify:query:v3:{connection_id}:{flags}:{normalized}:{entity_part}"
+    return f"shopify:query:v4:{connection_id}:{flags}:{normalized}:{entity_part}"
 
 def _local_cache_get(key: str):
     cached = _local_query_cache.get(key)
