@@ -77,10 +77,6 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
                         text = "track order"
                     elif reply_id == "menu:human":
                         text = "talk to human"
-                    elif reply_id.startswith("order_action:track:"):
-                        text = f"track order {reply_id.removeprefix('order_action:track:')}"
-                    elif reply_id.startswith("order_action:return:"):
-                        text = f"return {reply_id.removeprefix('order_action:return:')}"
                     else:
                         text = title or reply_id
 
