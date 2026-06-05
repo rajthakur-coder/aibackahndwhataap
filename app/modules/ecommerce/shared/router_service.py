@@ -13,7 +13,9 @@ from app.models.ecommerce import (
     ShopifyCatalogDefaultCategory,
 )
 from app.modules.ecommerce.shared.core_service import (
+    _normalize_product,
     bootstrap_shopify_connection,
+    fetch_all_products,
     fetch_shopify_collections,
     fetch_shopify_collects,
     find_shopify_connection_by_domain,
@@ -90,8 +92,17 @@ async def clear_shopify_catalog_cache(connection_id: int) -> None:
 def shopify_collection_rows(connection: EcommerceConnection) -> list[dict]:
     collections = fetch_shopify_collections(connection, 250)
     collects = fetch_shopify_collects(connection, 5000)
+    products = fetch_all_products(connection, 5000)
+    in_stock_product_ids = {
+        str(normalized.get("shopify_product_id") or normalized.get("external_id") or "")
+        for normalized in (_normalize_product(connection, product) for product in products)
+        if normalized.get("status") == "active" and normalized.get("in_stock")
+    }
     counts: dict[str, int] = {}
     for collect in collects:
+        product_id = str(collect.get("product_id") or "")
+        if product_id not in in_stock_product_ids:
+            continue
         collection_id = str(collect.get("collection_id") or "")
         if collection_id:
             counts[collection_id] = counts.get(collection_id, 0) + 1
