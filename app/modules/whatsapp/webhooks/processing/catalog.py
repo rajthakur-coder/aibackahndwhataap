@@ -108,6 +108,7 @@ __all__ = [
     "_send_more_category_button_if_needed",
     "_handle_top_selling_products",
     "_handle_recommended_products",
+    "_handle_product_detail_question",
     "_handle_catalog_products",
     "_catalog_products_text",
     "_handle_product_image",

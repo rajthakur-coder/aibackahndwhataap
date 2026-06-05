@@ -83,6 +83,64 @@ from app.modules.whatsapp.webhooks.processing.replies import (
 
 from app.modules.whatsapp.webhooks.catalog.category import *
 
+PRODUCT_DETAIL_RE = re.compile(
+    r"\b(?:dimension|dimensions|measurement|measurements|size|sizes|capacity|volume)\b",
+    re.I,
+)
+PRODUCT_DETAIL_STRONG_RE = re.compile(r"\b(?:dimension|dimensions|measurement|measurements|capacity|volume)\b", re.I)
+PRODUCT_DETAIL_QUESTION_RE = re.compile(
+    r"\b(?:what|which|kya|kitna|kitni|batao|tell|available|options?|is|are|hai|hain)\b",
+    re.I,
+)
+MEASUREMENT_VALUE_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:cm|mm|m|inch|inches|in|ft|feet|ml|l|ltr|litre|liter|kg|g)\b",
+    re.I,
+)
+
+
+async def _handle_product_detail_question(context: WebhookProcessingContext) -> bool:
+    if not _is_product_detail_question(context.query_text):
+        return False
+
+    with context.timing.stage("shopify_product_detail_fetch"):
+        catalog_products = await find_cached_catalog_products(
+            context.db,
+            context.query_text,
+            limit=3,
+            entities=context.understanding.entities,
+            phone=context.phone,
+        )
+    catalog_products = catalog_products or []
+    if not catalog_products:
+        fallback_query = _fallback_product_query(context.query_text)
+        if fallback_query and fallback_query != context.query_text:
+            with context.timing.stage("shopify_product_detail_fallback_fetch"):
+                catalog_products = await find_cached_catalog_products(
+                    context.db,
+                    fallback_query,
+                    limit=3,
+                    entities=context.understanding.entities,
+                    phone=context.phone,
+                )
+            catalog_products = catalog_products or []
+
+    if not catalog_products:
+        await _send_text_reply(
+            context,
+            _localized(
+                context.reply_language,
+                "I could not find that product in the enabled catalog collections. Please try the product name again.",
+                "Enabled catalog collections me ye product nahi mila. Kripya product name dobara bhejein.",
+            ),
+        )
+        return True
+
+    product = catalog_products[0]
+    await _send_text_reply(context, _product_detail_answer(context, product))
+    remember_last_products(context.db, context.phone, catalog_products)
+    return True
+
+
 async def _handle_top_selling_products(context: WebhookProcessingContext) -> bool:
     if not is_top_selling_request(context.query_text) and context.understanding.intent != "top_selling_products":
         return False
@@ -238,6 +296,14 @@ def _is_product_search_request(context: WebhookProcessingContext) -> bool:
         return True
     return False
 
+def _is_product_detail_question(query: str) -> bool:
+    text = query or ""
+    if not PRODUCT_DETAIL_RE.search(text):
+        return False
+    if not PRODUCT_DETAIL_STRONG_RE.search(text) and not PRODUCT_DETAIL_QUESTION_RE.search(text):
+        return False
+    return _is_shopify_catalog_request(text) or bool(_fallback_product_query(text))
+
 def _fallback_product_query(query: str) -> str:
     text = re.sub(
         r"\b\d+(?:\.\d+)?\s*(?:cm|mm|m|inch|inches|in|ft|feet|ml|l|ltr|litre|liter|kg|g)\b",
@@ -248,6 +314,112 @@ def _fallback_product_query(query: str) -> str:
     text = re.sub(r"\b(?:what|about|dimension|dimensions|size|of|is|the|for|need|want)\b", " ", text, flags=re.I)
     text = " ".join(text.split())
     return text
+
+def _product_detail_answer(context: WebhookProcessingContext, product: dict) -> str:
+    title = str(product.get("title") or "this product").strip()
+    detail_lines = _product_detail_lines(product)
+    if detail_lines:
+        lines = [f"{title} details:"]
+        lines.extend(detail_lines)
+        if product.get("product_url"):
+            lines.append(f"Product link: {tracking_url(product['product_url'], phone=context.phone, source='product_detail', title=title)}")
+        return "\n".join(lines)
+
+    price = product.get("price") or product.get("price_min") or ""
+    parts = [f"I found {title}, but dimension/capacity details are not listed in the Shopify product data."]
+    if price:
+        parts.append(f"Price starts at {price}.")
+    if product.get("product_url"):
+        parts.append(f"Product link: {tracking_url(product['product_url'], phone=context.phone, source='product_detail', title=title)}")
+    return " ".join(parts)
+
+def _product_detail_lines(product: dict) -> list[str]:
+    lines = []
+    option_lines = _option_detail_lines(product)
+    if option_lines:
+        lines.extend(option_lines)
+
+    description_values = _measurement_values(str(product.get("description") or ""))
+    if description_values and not _values_already_covered(description_values, lines):
+        lines.append("Measurements mentioned: " + ", ".join(description_values[:8]))
+
+    if not lines:
+        variant_values = _variant_detail_values(product)
+        if variant_values:
+            lines.append("Available variants: " + ", ".join(variant_values[:10]))
+    return lines
+
+def _option_detail_lines(product: dict) -> list[str]:
+    options = product.get("options") or []
+    lines = []
+    for index, option in enumerate(options[:3], start=1):
+        if not isinstance(option, dict):
+            continue
+        name = str(option.get("name") or f"Option {index}").strip()
+        raw_values = option.get("values") or []
+        values = [str(value).strip() for value in raw_values if str(value or "").strip()]
+        if not values:
+            continue
+        relevant = _is_detail_option(name, values)
+        if not relevant:
+            continue
+        available_values = _available_option_values(product, index)
+        if available_values:
+            values = [value for value in values if value.lower() in available_values] or values
+        lines.append(f"{name}: {', '.join(_dedupe(values)[:10])}")
+    return lines
+
+def _is_detail_option(name: str, values: list[str]) -> bool:
+    lowered_name = name.lower()
+    if any(term in lowered_name for term in ("size", "capacity", "volume", "dimension", "measurement")):
+        return True
+    return any(MEASUREMENT_VALUE_RE.search(value) for value in values)
+
+def _available_option_values(product: dict, position: int) -> set[str]:
+    values = set()
+    for variant in product.get("variants") or []:
+        if not isinstance(variant, dict):
+            continue
+        quantity = variant.get("inventory_quantity")
+        if isinstance(quantity, int) and quantity <= 0:
+            continue
+        value = str(variant.get(f"option{position}") or "").strip()
+        if value:
+            values.add(value.lower())
+    return values
+
+def _variant_detail_values(product: dict) -> list[str]:
+    values = []
+    for variant in product.get("variants") or []:
+        if not isinstance(variant, dict):
+            continue
+        quantity = variant.get("inventory_quantity")
+        if isinstance(quantity, int) and quantity <= 0:
+            continue
+        for key in ("title", "option1", "option2", "option3"):
+            value = str(variant.get(key) or "").strip()
+            if value and value.lower() != "default title" and MEASUREMENT_VALUE_RE.search(value):
+                values.append(value)
+    return _dedupe(values)
+
+def _measurement_values(text: str) -> list[str]:
+    return _dedupe(match.group(0).upper().replace(" ", "") for match in MEASUREMENT_VALUE_RE.finditer(text or ""))
+
+def _values_already_covered(values: list[str], lines: list[str]) -> bool:
+    haystack = " ".join(lines).lower().replace(" ", "")
+    return all(value.lower().replace(" ", "") in haystack for value in values)
+
+def _dedupe(values) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        text = str(value or "").strip()
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
 
 def _catalog_products_text(phone: str, catalog_products: list[dict]) -> str:
     lines = ["Catalog:"]
@@ -269,6 +441,7 @@ def _catalog_products_text(phone: str, catalog_products: list[dict]) -> str:
     return "\n\n".join(lines)
 
 __all__ = [
+    "_handle_product_detail_question",
     "_handle_top_selling_products",
     "_handle_recommended_products",
     "_handle_catalog_products",

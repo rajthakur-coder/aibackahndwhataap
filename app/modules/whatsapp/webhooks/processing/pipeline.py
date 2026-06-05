@@ -188,6 +188,7 @@ async def _process_webhook_event_with_typing(
         _handle_catalog_request,
         _handle_top_selling_products,
         _handle_recommended_products,
+        _handle_product_detail_question,
         _handle_catalog_products,
         _handle_product_image,
     )

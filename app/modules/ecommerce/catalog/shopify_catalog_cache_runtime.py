@@ -522,7 +522,7 @@ def _query_cache_key(
     if isinstance(entities, dict) and entities:
         entity_part = json.dumps(entities, sort_keys=True, ensure_ascii=True)[:240]
     flags = f"limit:{limit}:image:{int(require_image)}:fallback:{int(allow_fallback)}"
-    return f"shopify:query:v4:{connection_id}:{flags}:{normalized}:{entity_part}"
+    return f"shopify:query:v5:{connection_id}:{flags}:{normalized}:{entity_part}"
 
 def _local_cache_get(key: str):
     cached = _local_query_cache.get(key)

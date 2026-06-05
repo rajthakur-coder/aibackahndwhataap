@@ -56,6 +56,14 @@ STOP_WORDS = {
 }
 
 ALIASES = {
+    "airtight": {"airtight", "air", "tight"},
+    "container": {"container", "containers", "jar", "jars", "box", "storage"},
+    "containers": {"container", "containers", "jar", "jars", "box", "storage"},
+    "cup": {"cup", "cups", "suction"},
+    "cups": {"cup", "cups", "suction"},
+    "glass": {"glass", "jar", "jars", "container", "containers"},
+    "jar": {"jar", "jars", "glass", "container", "containers"},
+    "jars": {"jar", "jars", "glass", "container", "containers"},
     "joota": {"shoe", "shoes", "footwear"},
     "jute": {"shoe", "shoes", "footwear"},
     "juta": {"shoe", "shoes", "footwear"},
@@ -72,6 +80,8 @@ ALIASES = {
     "tshirt": {"tshirt", "shirt", "t", "tee"},
     "tee": {"tshirt", "shirt", "tee"},
     "watch": {"watch", "watches"},
+    "wood": {"wood", "wooden"},
+    "wooden": {"wood", "wooden"},
 }
 
 
