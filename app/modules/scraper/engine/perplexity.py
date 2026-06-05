@@ -35,6 +35,8 @@ def get_brand_intelligence(url: str) -> Dict[str, Any]:
         "industry": "Specific industry category",
         "about_company": "Professional summary (80-120 words).",
         "target_demographics": "Description of the target audience.",
+        "policies": "Return, exchange, refund, shipping, cancellation, COD, and warranty policy details found on official pages. Include exact days, conditions, exclusions, charges, and timelines when available.",
+        "faqs": "Customer-facing FAQs found or inferred from official website pages only. Format as Q/A text.",
         "website_link": "The canonical URL.",
         "competitors": [{"name": "Name", "url": "URL"}],
         "socials": [
@@ -60,11 +62,17 @@ def get_brand_intelligence(url: str) -> Dict[str, Any]:
     GENERAL GUIDELINES:
     1. Output ONLY valid JSON. No markdown formatting.
     2. Find exactly 5 direct competitors.
-    3. Follow this JSON schema exactly:
+    3. Search the website and official policy pages for return, exchange, refund, shipping, cancellation, COD, and warranty details.
+    4. If exact policy details are not available, return an empty string for 'policies' instead of placeholder text.
+    5. For 'faqs', use real website FAQ/help content when available. If unavailable, return an empty string.
+    6. Follow this JSON schema exactly:
     {json.dumps(schema_structure)}
     """
 
-    user_prompt = f"Perform a deep search and analyze the brand at this URL: {url}. Extract all official social media links and 5 competitors."
+    user_prompt = (
+        f"Perform a deep search and analyze the brand at this URL: {url}. "
+        "Extract official social media links, 5 competitors, customer policies, and FAQ/help content."
+    )
 
     payload = {
         "model": "sonar-pro",

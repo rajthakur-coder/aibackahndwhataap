@@ -24,6 +24,8 @@ class ScraperResultOut(BaseModel):
     color_palette: List[str] = []
     fonts: List[str] = []
     target_demographics: Optional[str] = None
+    policies: Optional[str] = None
+    faqs: Optional[str] = None
     socials: List[ScraperSocialOut] = []
     competitors: List[ScraperCompetitorOut] = []
     page_images: List[str] = []

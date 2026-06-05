@@ -64,7 +64,7 @@ def _normalize_social_type(raw_type: str | None, raw_url: str | None) -> str | N
 def _normalize_socials(assets: dict, intelligence: dict) -> list[ScraperSocialOut]:
     socials_visual = assets.get("socials") if isinstance(assets.get("socials"), list) else []
     socials_intel = intelligence.get("socials") if isinstance(intelligence.get("socials"), list) else []
-    picked_socials = socials_visual if _has_any_social_url(socials_visual) else socials_intel
+    picked_socials = [*socials_visual, *socials_intel]
 
     seen: set[str] = set()
     output: list[ScraperSocialOut] = []
@@ -136,8 +136,19 @@ async def run_brand_scraper(payload: ScraperInput) -> ScraperResponse:
             color_palette=assets.get("color_palette") or [],
             fonts=assets.get("fonts") or [],
             target_demographics=intelligence.get("target_demographics"),
+            policies=_clean_text(intelligence.get("policies")),
+            faqs=_clean_text(intelligence.get("faqs")),
             socials=_normalize_socials(assets, intelligence),
             competitors=_normalize_competitors(intelligence),
             page_images=assets.get("page_images") or [],
         ),
     )
+
+
+def _clean_text(value: object) -> str | None:
+    if isinstance(value, list):
+        value = "\n".join(str(item).strip() for item in value if str(item).strip())
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
