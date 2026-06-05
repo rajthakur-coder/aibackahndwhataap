@@ -179,7 +179,7 @@ async def sync_ecommerce_orders(
 @router.post("/connections/{connection_id}/sync-products")
 async def sync_ecommerce_products(
     connection_id: int,
-    data: EcommerceProductSyncRequest,
+    data: EcommerceProductSyncRequest | None = None,
     tenant_id: str = Depends(strict_tenant_id),
     db: AsyncSession = Depends(get_db),
 ):
