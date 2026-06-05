@@ -130,11 +130,12 @@ async def _handle_top_selling_products(context: WebhookProcessingContext) -> boo
     return True
 
 async def _handle_recommended_products(context: WebhookProcessingContext) -> bool:
+    product_limit = max(context.requested_limit, 10)
     with context.timing.stage("shopify_recommendations_fetch"):
         recommended_products = await find_cached_product_recommendations(
             context.db,
             context.query_text,
-            limit=context.requested_limit,
+            limit=product_limit,
             entities=context.understanding.entities,
             phone=context.phone,
         )
@@ -167,11 +168,12 @@ async def _handle_recommended_products(context: WebhookProcessingContext) -> boo
     return True
 
 async def _handle_catalog_products(context: WebhookProcessingContext) -> bool:
+    product_limit = max(context.requested_limit, 10)
     with context.timing.stage("shopify_catalog_fetch"):
         catalog_products = await find_cached_catalog_products(
             context.db,
             context.query_text,
-            limit=context.requested_limit,
+            limit=product_limit,
             entities=context.understanding.entities,
             phone=context.phone,
     )

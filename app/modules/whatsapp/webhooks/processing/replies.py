@@ -50,7 +50,7 @@ from app.modules.whatsapp.webhooks.responses.response_service import (
     send_cross_sell_products as _send_cross_sell_products,
     understanding_context as _understanding_context,
 )
-from app.shared.arq_queue import enqueue_whatsapp_product_images
+from app.shared.arq_queue import enqueue_whatsapp_cross_sell, enqueue_whatsapp_product_images
 from app.modules.ai.understanding.query_understanding_service import understand_message
 from app.modules.ai.recommendations.sales_recommendations_service import (
     is_top_selling_request,
@@ -276,12 +276,12 @@ async def _queue_cross_sell_products(
     if not base_products:
         return
     try:
-        await _send_cross_sell_products(db, phone, text, base_products)
+        await enqueue_whatsapp_cross_sell(phone, text, base_products, delay_seconds=15 * 60)
     except Exception as exc:
         db.add(
             AgentAction(
                 phone=phone,
-                action_type="cross_sell_send_failed",
+                action_type="cross_sell_enqueue_failed",
                 status="failed",
                 payload=json.dumps({"base_product_count": len(base_products)}),
                 result=json.dumps({"error": str(exc)}),

@@ -41,10 +41,9 @@ GIFT_TIMELINE_BUTTONS = [
     {"id": "gift_time:flex", "title": "Flexible"},
 ]
 RETURN_REASON_ROWS = [
-    {"id": "return:damaged", "title": "Damaged", "description": "Damaged or defective"},
+    {"id": "return:damaged", "title": "Damaged", "description": "Product was received in damaged condition"},
     {"id": "return:wrong", "title": "Wrong product", "description": "Different item received"},
-    {"id": "return:style", "title": "Doesn't suit", "description": "Color, size, or feel"},
-    {"id": "return:changed", "title": "Changed mind", "description": "No longer needed"},
+    {"id": "return:other", "title": "Other", "description": "Tell us what happened"},
 ]
 GIFTING_ROWS = [
     {"id": "gift:corporate", "title": "Corporate", "description": "Employee or client gifting"},
@@ -76,6 +75,24 @@ async def _handle_commerce_interactive_flows(context: WebhookProcessingContext) 
         return await _send_return_reason_list(context)
     if _is_manual_return_item_selection(context, text):
         return await _send_return_reason_list(context)
+    if _is_return_other_reason_response(context, text):
+        return await _send_return_outcome_buttons(context, {"reason": (context.text or context.query_text or "").strip()})
+    if _is_return_proof_image_response(context):
+        return await _send_return_outcome_buttons(context, {"proof_image_received": True})
+    if _latest_return_proof_image_active(context):
+        await _send_text(
+            context,
+            _flow_text(
+                context,
+                "return_proof_image_required",
+                "Please upload a product photo so we can review your return request.",
+            ),
+        )
+        return True
+    if _is_return_other_reason(text):
+        return await _send_return_other_reason_prompt(context)
+    if _is_return_proof_required_reason(text):
+        return await _send_return_proof_image_prompt(context)
     if _is_return_reason(text):
         return await _send_return_outcome_buttons(context)
     if _is_return_outcome(text):
@@ -336,7 +353,7 @@ async def _send_return_reason_list(context: WebhookProcessingContext, initial_st
     body = _flow_text(
         context,
         "return_reason_prompt",
-        "We're sorry the product wasn't the right fit for you. Please choose the reason for your return so we can assist you better.",
+        "We're sorry the product wasn't the right fit for you. Please choose the reason for your return / exchange so we can assist you better.",
     )
     try:
         await run_in_threadpool(
@@ -345,7 +362,7 @@ async def _send_return_reason_list(context: WebhookProcessingContext, initial_st
             body,
             "Reasons",
             RETURN_REASON_ROWS,
-            "Return",
+            "Return / Exchange",
             "Reason",
         )
         save_message(
@@ -363,16 +380,56 @@ async def _send_return_reason_list(context: WebhookProcessingContext, initial_st
             _flow_text(
                 context,
                 "return_reason_fallback",
-                "What went wrong: damaged, wrong product, color/size, or changed mind?",
+                "What went wrong: damaged, wrong product, or other?",
             ),
         )
         return True
 
 
-async def _send_return_outcome_buttons(context: WebhookProcessingContext) -> bool:
+async def _send_return_other_reason_prompt(context: WebhookProcessingContext) -> bool:
+    state = {**_latest_return_payload_state(context), **_return_flow_state(context)}
+    body = _flow_text(
+        context,
+        "return_other_reason_prompt",
+        "Please type the reason for your return so we can assist you better.",
+    )
+    await _send_text(context, body)
+    save_message(
+        context.db,
+        context.phone,
+        body,
+        "outgoing",
+        message_type="text",
+        payload={"title": "Return other reason", "body": body, "return_state": state},
+    )
+    return True
+
+
+async def _send_return_proof_image_prompt(context: WebhookProcessingContext) -> bool:
     state = {**_latest_return_payload_state(context), **_return_flow_state(context)}
     current_text = (context.text or context.query_text or "").strip().lower()
-    if _is_return_reason(current_text):
+    state["reason"] = _return_reason_label(current_text)
+    body = _flow_text(
+        context,
+        "return_proof_image_prompt",
+        "Please share a photo of the product so we can review your return request.",
+    )
+    await _send_text(context, body)
+    save_message(
+        context.db,
+        context.phone,
+        body,
+        "outgoing",
+        message_type="text",
+        payload={"title": "Return proof image", "body": body, "return_state": state},
+    )
+    return True
+
+
+async def _send_return_outcome_buttons(context: WebhookProcessingContext, initial_state: dict | None = None) -> bool:
+    state = {**_latest_return_payload_state(context), **_return_flow_state(context), **(initial_state or {})}
+    current_text = (context.text or context.query_text or "").strip().lower()
+    if "reason" not in state and _is_return_reason(current_text):
         state["reason"] = _return_reason_label(current_text)
     body = _flow_text(
         context,
@@ -625,6 +682,26 @@ def _is_return_reason(text: str) -> bool:
     }
 
 
+def _is_return_other_reason(text: str) -> bool:
+    return text in {"return:other", "other"}
+
+
+def _is_return_other_reason_response(context: WebhookProcessingContext, text: str) -> bool:
+    if not text or _is_return_other_reason(text):
+        return False
+    if _is_return_flow_start_marker(text) or _is_return_outcome(text) or _is_return_confirmation_yes(text) or _is_return_confirmation_no(text):
+        return False
+    return _latest_return_other_reason_active(context)
+
+
+def _is_return_proof_required_reason(text: str) -> bool:
+    return text in {"damaged", "wrong product", "return:damaged", "return:wrong"}
+
+
+def _is_return_proof_image_response(context: WebhookProcessingContext) -> bool:
+    return _latest_return_proof_image_active(context) and _event_has_image(context)
+
+
 def _is_gifting_request(text: str) -> bool:
     return "gifting" in text or "bulk" in text or text.startswith("gift:")
 
@@ -829,7 +906,7 @@ def _latest_return_payload_state(context: WebhookProcessingContext) -> dict:
     if not isinstance(payload, dict):
         return {}
     title = str(payload.get("title") or "").strip().lower()
-    if title not in {"return items", "return reasons", "return outcome", "confirm return"}:
+    if title not in {"return items", "return reasons", "return other reason", "return proof image", "return outcome", "confirm return"}:
         return {}
     state = payload.get("return_state")
     return state if isinstance(state, dict) else {}
@@ -857,7 +934,37 @@ def _latest_return_context_active(context: WebhookProcessingContext) -> bool:
     except json.JSONDecodeError:
         return False
     title = str(payload.get("title") or "").strip().lower() if isinstance(payload, dict) else ""
-    return title in {"return reasons", "return orders", "return items", "return outcome", "confirm return", "return", "reason"}
+    return title in {"return reasons", "return orders", "return items", "return other reason", "return proof image", "return outcome", "confirm return", "return", "reason"}
+
+
+def _latest_return_other_reason_active(context: WebhookProcessingContext) -> bool:
+    return _latest_return_prompt_title(context) == "return other reason"
+
+
+def _latest_return_proof_image_active(context: WebhookProcessingContext) -> bool:
+    return _latest_return_prompt_title(context) == "return proof image"
+
+
+def _latest_return_prompt_title(context: WebhookProcessingContext) -> str:
+    row = context.db.execute(
+        select(Message)
+        .where(
+            Message.tenant_id == context.tenant_id,
+            Message.phone == context.phone,
+            Message.direction == "outgoing",
+            Message.payload.is_not(None),
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    ).scalars().first()
+    if not row or not row.payload:
+        return False
+    try:
+        payload = json.loads(row.payload)
+    except json.JSONDecodeError:
+        return ""
+    title = str(payload.get("title") or "").strip().lower() if isinstance(payload, dict) else ""
+    return title
 
 
 def _latest_track_context_active(context: WebhookProcessingContext) -> bool:
@@ -975,6 +1082,17 @@ def _order_items(order) -> list[dict]:
     return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
 
 
+def _event_has_image(context: WebhookProcessingContext) -> bool:
+    try:
+        payload = json.loads(context.event.payload or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    message_payload = payload.get("message") if isinstance(payload, dict) else None
+    if not isinstance(message_payload, dict):
+        message_payload = payload if isinstance(payload, dict) else {}
+    return str(message_payload.get("type") or "").lower() == "image" or isinstance(message_payload.get("image"), dict)
+
+
 def _return_flow_state(context: WebhookProcessingContext) -> dict:
     rows_desc = context.db.execute(
         select(Message)
@@ -1050,8 +1168,8 @@ def _return_summary_text(context: WebhookProcessingContext, state: dict) -> str:
 
 def _return_reason_label(text: str) -> str:
     labels = {
-        "return:damaged": "Damaged or defective",
-        "damaged": "Damaged or defective",
+        "return:damaged": "Product was received in damaged condition",
+        "damaged": "Product was received in damaged condition",
         "return:wrong": "Wrong product received",
         "wrong product": "Wrong product received",
         "return:style": "Color, size, or feel issue",

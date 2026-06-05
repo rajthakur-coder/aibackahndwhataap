@@ -204,6 +204,7 @@ async def try_send_catalog_category_list(
         )
     if not rows:
         return False
+    rows = [_category_row_without_count(row) for row in rows]
     try:
         if timing:
             with timing.stage("whatsapp_send_list"):
@@ -229,6 +230,12 @@ async def try_send_catalog_category_list(
     except Exception:
         return False
     return True
+
+def _category_row_without_count(row: dict) -> dict:
+    row_id = str(row.get("id") or "")
+    if row_id.startswith("catalog:page:"):
+        return row
+    return {**row, "description": ""}
 
 __all__ = [
     "selected_catalog_category",

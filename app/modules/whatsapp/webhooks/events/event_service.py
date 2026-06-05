@@ -43,6 +43,8 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
             for message in value.get("messages", []):
                 message_id = message.get("id")
                 text = message.get("text", {}).get("body")
+                if not text and message.get("type") == "image":
+                    text = message.get("image", {}).get("caption") or "[image]"
                 phone = message.get("from")
                 interactive = message.get("interactive") or {}
                 list_reply = interactive.get("list_reply") if interactive.get("type") == "list_reply" else None

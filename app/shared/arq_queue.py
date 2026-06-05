@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 from weakref import WeakKeyDictionary
 
 from arq import create_pool
@@ -59,16 +60,20 @@ async def enqueue_whatsapp_cross_sell(
     phone: str,
     text: str,
     base_products: list[dict],
+    delay_seconds: int = 0,
 ) -> str | None:
     redis = await get_arq_pool()
+    queued_at = datetime.now(timezone.utc).isoformat()
     job = await redis.enqueue_job(
         "process_whatsapp_cross_sell",
         phone,
         text[:1000],
         base_products[:5],
-        _job_id=f"cross-sell:{phone}:{hash(text)}",
+        queued_at,
+        _job_id=f"cross-sell:{phone}:{hash(text)}:{int(delay_seconds)}",
         _queue_name=settings.ARQ_QUEUE_NAME,
         _expires=settings.ARQ_DEFAULT_TIMEOUT * 3,
+        _defer_by=max(0, delay_seconds),
     )
     return job.job_id if job else None
 
