@@ -166,11 +166,11 @@ def process_automation_event(db: Session, event: AutomationEvent) -> dict:
         not settings.SHOPIFY_WEBHOOK_AUTOMATION_ENABLED
         and str(event.source or "").strip() in PAUSED_SHOPIFY_AUTOMATION_SOURCES
     ):
-        event.status = "paused"
-        event.error = "Shopify/live ecommerce automation is paused; manual ecommerce_api tests are still allowed."
+        event.status = "pending"
+        event.error = "Shopify/live ecommerce automation is paused. Enable SHOPIFY_WEBHOOK_AUTOMATION_ENABLED to send queued events."
         db.commit()
         return {
-            "status": "paused",
+            "status": "skipped",
             "event_id": event.id,
             "reason": "shopify_automation_paused",
             "sent": 0,

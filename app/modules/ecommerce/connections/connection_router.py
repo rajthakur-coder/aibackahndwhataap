@@ -222,7 +222,7 @@ async def sync_ecommerce_checkouts(
     def sync_op(sync_db: Session):
         connection = connection_or_404(sync_db, connection_id, tenant_id)
         try:
-            return sync_abandoned_checkouts(sync_db, connection, data.limit)
+            return sync_abandoned_checkouts(sync_db, connection, data.limit, force=True)
         except requests.RequestException as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 

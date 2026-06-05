@@ -182,12 +182,24 @@ async def _handle_catalog_products(context: WebhookProcessingContext) -> bool:
     )
     catalog_products = catalog_products or []
     if not catalog_products:
+        fallback_query = _fallback_product_query(context.query_text)
+        if fallback_query and fallback_query != context.query_text:
+            with context.timing.stage("shopify_catalog_fallback_fetch"):
+                catalog_products = await find_cached_catalog_products(
+                    context.db,
+                    fallback_query,
+                    limit=product_limit,
+                    entities=context.understanding.entities,
+                    phone=context.phone,
+                )
+            catalog_products = catalog_products or []
+    if not catalog_products:
         await _send_text_reply(
             context,
             _localized(
                 context.reply_language,
-                "This product is not currently available.",
-                "Maaf kijiye, yeh product filhaal available nahi hai.",
+                "I could not find an exact match in the enabled catalog collections. Try another size, material, or category.",
+                "Enabled catalog collections me exact match nahi mila. Aap koi aur size, material, ya category try kar sakte hain.",
             ),
         )
         return True
@@ -225,6 +237,17 @@ def _is_product_search_request(context: WebhookProcessingContext) -> bool:
     if context.understanding.tool == "search_products":
         return True
     return False
+
+def _fallback_product_query(query: str) -> str:
+    text = re.sub(
+        r"\b\d+(?:\.\d+)?\s*(?:cm|mm|m|inch|inches|in|ft|feet|ml|l|ltr|litre|liter|kg|g)\b",
+        " ",
+        query or "",
+        flags=re.I,
+    )
+    text = re.sub(r"\b(?:what|about|dimension|dimensions|size|of|is|the|for|need|want)\b", " ", text, flags=re.I)
+    text = " ".join(text.split())
+    return text
 
 def _catalog_products_text(phone: str, catalog_products: list[dict]) -> str:
     lines = ["Catalog:"]

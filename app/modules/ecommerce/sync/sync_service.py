@@ -1,4 +1,5 @@
 import json
+import asyncio
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -70,6 +71,13 @@ def sync_active_ecommerce_connections_with_session(db: Session) -> dict:
 async def sync_active_ecommerce_connections() -> dict:
     async with AsyncSessionLocal() as db:
         return await db.run_sync(sync_active_ecommerce_connections_with_session)
+
+
+async def ecommerce_auto_sync_loop() -> None:
+    await asyncio.sleep(10)
+    while settings.ECOMMERCE_AUTO_SYNC_CHECKOUTS_ENABLED:
+        await sync_active_ecommerce_connections()
+        await asyncio.sleep(settings.ECOMMERCE_AUTO_SYNC_INTERVAL_SECONDS)
 
 
 def retry_failed_shopify_webhooks_with_session(db: Session, limit: int = 25) -> dict:

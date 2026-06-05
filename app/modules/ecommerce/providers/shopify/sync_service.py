@@ -25,8 +25,8 @@ SHOPIFY_WEBHOOK_TOPICS = {
 def _json_dumps(value) -> str:
     return json.dumps(value, ensure_ascii=True)
 
-def sync_abandoned_checkouts(db: Session, connection: EcommerceConnection, limit: int = 50) -> dict:
-    if not settings.ECOMMERCE_AUTO_SYNC_CHECKOUTS_ENABLED:
+def sync_abandoned_checkouts(db: Session, connection: EcommerceConnection, limit: int = 50, *, force: bool = False) -> dict:
+    if not force and not settings.ECOMMERCE_AUTO_SYNC_CHECKOUTS_ENABLED:
         return {
             "status": "skipped",
             "reason": "checkout_auto_sync_disabled",
@@ -47,7 +47,7 @@ def sync_abandoned_checkouts(db: Session, connection: EcommerceConnection, limit
         if not payload.get("phone"):
             skipped += 1
             continue
-        create_abandoned_cart_event(db, payload=payload, source="shopify_checkouts_api")
+        create_abandoned_cart_event(db, payload=payload, source="ecommerce_api" if force else "shopify_checkouts_api")
         queued += 1
     return {"status": "success", "fetched": len(checkouts), "queued": queued, "skipped": skipped}
 
