@@ -111,6 +111,7 @@ def knowledge_context(db: Session, message: str = "", tenant_id: str = DEFAULT_T
 
 
 def _clean_knowledge_text(text: str | None, *, kind: str = "text") -> str | None:
+    text = _repair_common_mojibake(str(text or ""))
     noisy_terms = (
         "skip to content",
         "your cart is empty",
@@ -132,14 +133,37 @@ def _clean_knowledge_text(text: str | None, *, kind: str = "text") -> str | None
         "err_blocked_by_client",
         "base64-image-removed",
         "top selling",
+        "powered by shopify",
     )
+    noisy_exact = {
+        "home improvement",
+        "kitchen",
+        "organisers",
+        "cooking",
+        "furnishing",
+        "log in",
+        "cart",
+        "company",
+        "search",
+        "about us",
+        "contact us",
+        "track your orders",
+        "policy",
+        "payment methods",
+    }
     clean_lines = []
-    for line in str(text or "").splitlines():
+    for line in text.splitlines():
         candidate = line.strip()
         if not candidate:
             continue
         lowered = candidate.lower()
+        if kind == "policies" and lowered in noisy_exact:
+            continue
         if lowered.startswith("![") or lowered.startswith("[](") or lowered.startswith("[skip"):
+            continue
+        if re.fullmatch(r"(?:₹|rs\.?)\s*0(?:\.00)?", lowered):
+            continue
+        if kind == "policies" and re.fullmatch(r"\d+\s*(?:items?)?", lowered):
             continue
         if re.fullmatch(r"(?:₹|rs\.?)\s*0(?:\.00)?", lowered):
             continue
@@ -155,7 +179,7 @@ def _clean_knowledge_text(text: str | None, *, kind: str = "text") -> str | None
 def _prioritize_policy_sections(text: str) -> str:
     sections = _split_policy_sections(text)
     if not sections:
-        return text[:6000]
+        return text[:12000]
     priority = (
         "return",
         "exchange",
@@ -171,8 +195,8 @@ def _prioritize_policy_sections(text: str) -> str:
         lowered = section.lower()
         if any(term in lowered for term in priority):
             picked.append(section)
-    picked = sorted(picked or sections, key=_policy_section_rank)
-    return "\n\n".join(picked)[:6000]
+    picked = _dedupe_sections(sorted(picked or sections, key=_policy_section_rank))
+    return "\n\n".join(picked)[:12000]
 
 
 def _policy_section_rank(section: str) -> int:
@@ -191,10 +215,43 @@ def _policy_section_rank(section: str) -> int:
 
 
 def _split_policy_sections(text: str) -> list[str]:
-    raw_sections = re.split(r"(?=Policy source:\s*https?://)", text)
+    raw_sections = re.split(
+        r"(?=Policy source:\s*https?://|^#?\s*(?:Return & Exchange Policy|RETURN, EXCHANGE AND REFUND POLICY|Cancellation Policy|Shipping Policy|Reverse pickup & exchange timeline|Claiming Refunds|Privacy Policy|Terms & Conditions)\b)",
+        text,
+        flags=re.I | re.M,
+    )
     sections = []
     for section in raw_sections:
         cleaned = section.strip()
         if cleaned:
             sections.append(cleaned)
     return sections
+
+
+def _dedupe_sections(sections: list[str]) -> list[str]:
+    seen = set()
+    output = []
+    for section in sections:
+        key = re.sub(r"\W+", "", section.lower())[:300]
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(section)
+    return output
+
+
+def _repair_common_mojibake(text: str) -> str:
+    replacements = {
+        "â€™": "'",
+        "â€˜": "'",
+        "â€œ": '"',
+        "â€": '"',
+        "â€“": "-",
+        "â€”": "-",
+        "â‚¹": "₹",
+        "Â©": "(c)",
+        "Â": " ",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    return text

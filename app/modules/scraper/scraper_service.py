@@ -7,6 +7,7 @@ import anyio
 
 from .engine.perplexity import get_brand_intelligence
 from .engine.scraper import scrape_brand_fields_only
+from app.modules.knowledge.knowledge_service import _clean_knowledge_text
 from .scraper_schema import (
     ScraperCompetitorOut,
     ScraperInput,
@@ -212,7 +213,8 @@ def _clean_scraped_policy_text(text: str) -> str:
         return cleaned
     policy_terms = ("return", "exchange", "refund", "shipping", "delivery", "cancel", "warranty", "cod")
     picked = [section for section in sections if any(term in section.lower() for term in policy_terms)]
-    return "\n\n".join(sorted(picked or sections, key=_policy_section_rank)).strip()
+    cleaned = "\n\n".join(sorted(picked or sections, key=_policy_section_rank)).strip()
+    return _clean_knowledge_text(cleaned, kind="policies") or ""
 
 
 def _policy_section_rank(section: str) -> int:

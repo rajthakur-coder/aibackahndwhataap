@@ -38,3 +38,34 @@ def test_return_policy_context_prioritizes_return_section():
     assert "48 hours of delivery" in context
     assert "Your cart is empty" not in context
     assert context.find("Return & Exchange Policy") < context.find("Shipping policy")
+
+
+def test_shopify_policy_noise_is_removed_before_storage():
+    db = _session()
+    save_knowledge_base(
+        db,
+        KnowledgeBaseRequest(
+            company_name="The Home Senses",
+            policies=(
+                "Skip to content\n\nExtra 5% off on all Prepaid Orders\n\n"
+                "The Home Senses\nHome Improvement\nKitchen\nLog in\nCart\n7\n7 items\n\n"
+                "Return & Exchange Policy\n\nRETURN, EXCHANGE AND REFUND POLICY\n\n"
+                "Wrong product, damaged product, genuine defect, or missing parts are eligible.\n"
+                "Please raise a request at contact@thehomesenses.in within 48 hours of delivery.\n\n"
+                "Cancellation Policy\n\nOrders can be cancelled before they are packaged for dispatch only.\n\n"
+                "Shipping Policy\n\nStandard shipping across India would take 3-7 days depending on your pincode.\n\n"
+                "Company\nSearch\nAbout Us\nPayment methods\n(c) 2026, The Home Senses Powered by Shopify"
+            ),
+        ),
+        tenant_id="brand-a",
+    )
+
+    stored = db.query(KnowledgeBase).one().policies
+
+    assert "Return & Exchange Policy" in stored
+    assert "within 48 hours of delivery" in stored
+    assert "Shipping Policy" in stored
+    assert "Skip to content" not in stored
+    assert "Home Improvement" not in stored
+    assert "7 items" not in stored
+    assert "Powered by Shopify" not in stored
