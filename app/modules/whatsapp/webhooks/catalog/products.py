@@ -96,6 +96,10 @@ MEASUREMENT_VALUE_RE = re.compile(
     r"\b\d+(?:\.\d+)?\s*(?:cm|mm|m|inch|inches|in|ft|feet|ml|l|ltr|litre|liter|kg|g)\b",
     re.I,
 )
+DIMENSION_VALUE_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:cm|mm|m|inch|inches|in|ft|feet|ml|l|ltr|litre|liter)\b",
+    re.I,
+)
 
 
 async def _handle_product_detail_question(context: WebhookProcessingContext) -> bool:
@@ -136,7 +140,14 @@ async def _handle_product_detail_question(context: WebhookProcessingContext) -> 
         return True
 
     product = catalog_products[0]
-    await _send_text_reply(context, _product_detail_answer(context, product))
+    answer = _product_detail_answer(context, product, include_link=False)
+    if await _send_product_carousel_reply(context, catalog_products, answer, "[carousel] Product details"):
+        remember_last_products(context.db, context.phone, catalog_products)
+        return True
+    if await _send_product_list_reply(context, catalog_products, "Product details", answer, "[product_list] Product details"):
+        remember_last_products(context.db, context.phone, catalog_products)
+        return True
+    await _send_text_reply(context, _product_detail_answer(context, product, include_link=True))
     remember_last_products(context.db, context.phone, catalog_products)
     return True
 
@@ -315,13 +326,13 @@ def _fallback_product_query(query: str) -> str:
     text = " ".join(text.split())
     return text
 
-def _product_detail_answer(context: WebhookProcessingContext, product: dict) -> str:
+def _product_detail_answer(context: WebhookProcessingContext, product: dict, include_link: bool = True) -> str:
     title = str(product.get("title") or "this product").strip()
     detail_lines = _product_detail_lines(product)
     if detail_lines:
         lines = [f"{title} details:"]
         lines.extend(detail_lines)
-        if product.get("product_url"):
+        if include_link and product.get("product_url"):
             lines.append(f"Product link: {tracking_url(product['product_url'], phone=context.phone, source='product_detail', title=title)}")
         return "\n".join(lines)
 
@@ -329,7 +340,7 @@ def _product_detail_answer(context: WebhookProcessingContext, product: dict) -> 
     parts = [f"I found {title}, but dimension/capacity details are not listed in the Shopify product data."]
     if price:
         parts.append(f"Price starts at {price}.")
-    if product.get("product_url"):
+    if include_link and product.get("product_url"):
         parts.append(f"Product link: {tracking_url(product['product_url'], phone=context.phone, source='product_detail', title=title)}")
     return " ".join(parts)
 
@@ -373,7 +384,7 @@ def _is_detail_option(name: str, values: list[str]) -> bool:
     lowered_name = name.lower()
     if any(term in lowered_name for term in ("size", "capacity", "volume", "dimension", "measurement")):
         return True
-    return any(MEASUREMENT_VALUE_RE.search(value) for value in values)
+    return any(DIMENSION_VALUE_RE.search(value) for value in values)
 
 def _available_option_values(product: dict, position: int) -> set[str]:
     values = set()
@@ -398,12 +409,12 @@ def _variant_detail_values(product: dict) -> list[str]:
             continue
         for key in ("title", "option1", "option2", "option3"):
             value = str(variant.get(key) or "").strip()
-            if value and value.lower() != "default title" and MEASUREMENT_VALUE_RE.search(value):
+            if value and value.lower() != "default title" and DIMENSION_VALUE_RE.search(value):
                 values.append(value)
     return _dedupe(values)
 
 def _measurement_values(text: str) -> list[str]:
-    return _dedupe(match.group(0).upper().replace(" ", "") for match in MEASUREMENT_VALUE_RE.finditer(text or ""))
+    return _dedupe(match.group(0).upper().replace(" ", "") for match in DIMENSION_VALUE_RE.finditer(text or ""))
 
 def _values_already_covered(values: list[str], lines: list[str]) -> bool:
     haystack = " ".join(lines).lower().replace(" ", "")
