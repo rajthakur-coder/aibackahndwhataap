@@ -262,15 +262,20 @@ async def _shopify_collection_index(db: Session, phone: str | None = None) -> li
         return cached
 
     try:
-        collections, collects = await run_in_threadpool(_fetch_shopify_collection_payload, connection)
+        collections, collects, raw_products = await run_in_threadpool(_fetch_shopify_collection_payload, connection)
     except Exception:
         return []
 
+    in_stock_product_ids = {
+        str(normalized.get("shopify_product_id") or normalized.get("external_id") or "")
+        for normalized in (_normalize_product(connection, product) for product in raw_products)
+        if normalized.get("status") == "active" and (normalized.get("stock_quantity") or 0) > 0
+    }
     products_by_collection: dict[str, list[str]] = defaultdict(list)
     for collect in collects:
         collection_id = str(collect.get("collection_id") or "")
         product_id = str(collect.get("product_id") or "")
-        if collection_id and product_id:
+        if collection_id and product_id and product_id in in_stock_product_ids:
             products_by_collection[collection_id].append(product_id)
 
     selected_collections = _selected_shopify_collections(db, connection.id)
@@ -300,8 +305,12 @@ async def _shopify_collection_index(db: Session, phone: str | None = None) -> li
     await _redis_set_json(cache_key, index, settings.SHOPIFY_QUERY_CACHE_TTL_SECONDS)
     return index
 
-def _fetch_shopify_collection_payload(connection: EcommerceConnection) -> tuple[list[dict], list[dict]]:
-    return fetch_shopify_collections(connection, 250), fetch_shopify_collects(connection, PRODUCT_CATALOG_CACHE_LIMIT)
+def _fetch_shopify_collection_payload(connection: EcommerceConnection) -> tuple[list[dict], list[dict], list[dict]]:
+    return (
+        fetch_shopify_collections(connection, 250),
+        fetch_shopify_collects(connection, PRODUCT_CATALOG_CACHE_LIMIT),
+        fetch_all_products(connection, PRODUCT_CATALOG_CACHE_LIMIT),
+    )
 
 def _selected_shopify_collections(db: Session, connection_id: int) -> dict[str, int] | None:
     rows = db.execute(
