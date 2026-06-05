@@ -174,10 +174,18 @@ async def _handle_catalog_products(context: WebhookProcessingContext) -> bool:
             limit=context.requested_limit,
             entities=context.understanding.entities,
             phone=context.phone,
-        )
+    )
     catalog_products = catalog_products or []
     if not catalog_products:
-        return False
+        await _send_text_reply(
+            context,
+            _localized(
+                context.reply_language,
+                "I do not currently have access to any enabled catalog collections. Please try again once the catalog has been updated.",
+                "Abhi enabled catalog collections ka access available nahi hai. Catalog update hone ke baad dobara try karein.",
+            ),
+        )
+        return True
 
     remember_last_products(context.db, context.phone, catalog_products)
     body_text = _localized(

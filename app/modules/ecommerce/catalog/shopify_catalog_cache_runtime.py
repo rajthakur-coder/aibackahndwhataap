@@ -152,7 +152,7 @@ def _first_retailer_id(product: dict) -> str | None:
 
 
 async def _cached_shopify_products(db: Session, phone: str | None = None) -> list[dict]:
-    return await _cached_all_shopify_products(db, phone=phone)
+    return await _cached_visible_catalog_products(db, phone=phone)
 
 async def _cached_all_shopify_products(db: Session, phone: str | None = None) -> list[dict]:
     connection = _active_shopify_connection(db, phone=phone)
@@ -172,6 +172,30 @@ async def _cached_all_shopify_products(db: Session, phone: str | None = None) ->
     products = [_product_result(_normalize_product(connection, product)) for product in raw_products]
     await _redis_set_json(cache_key, products, settings.SHOPIFY_PRODUCT_CACHE_TTL_SECONDS)
     return products
+
+async def _cached_visible_catalog_products(db: Session, phone: str | None = None) -> list[dict]:
+    connection = _active_shopify_connection(db, phone=phone)
+    if not connection:
+        return []
+
+    selected_collections = _selected_shopify_collections(db, connection.id)
+    products = await _cached_all_shopify_products(db, phone=phone)
+    if selected_collections is None:
+        return []
+
+    index = await _shopify_collection_index(db, phone=phone)
+    allowed_ids = {
+        str(product_id)
+        for collection in index
+        for product_id in collection.get("product_ids", [])
+    }
+    if not allowed_ids:
+        return []
+    return [
+        product
+        for product in products
+        if str(product.get("shopify_product_id") or product.get("external_id") or "") in allowed_ids
+    ]
 
 async def _cached_shopify_collection_categories(db: Session, phone: str | None = None) -> list[dict]:
     connection = _active_shopify_connection(db, phone=phone)
