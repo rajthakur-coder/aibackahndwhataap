@@ -202,7 +202,7 @@ async def _cached_shopify_collection_categories(db: Session, phone: str | None =
     if not connection or connection.platform != "shopify":
         return []
 
-    cache_key = f"shopify:collections:v3:{connection.id}"
+    cache_key = f"shopify:collections:v4:{connection.id}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list) and cached:
         return cached
@@ -256,7 +256,7 @@ async def _shopify_collection_index(db: Session, phone: str | None = None) -> li
     if not connection or connection.platform != "shopify":
         return []
 
-    cache_key = f"shopify:collection-index:v3:{connection.id}"
+    cache_key = f"shopify:collection-index:v4:{connection.id}"
     cached = await _redis_get_json(cache_key)
     if isinstance(cached, list) and cached:
         return cached
@@ -269,7 +269,7 @@ async def _shopify_collection_index(db: Session, phone: str | None = None) -> li
     in_stock_product_ids = {
         str(normalized.get("shopify_product_id") or normalized.get("external_id") or "")
         for normalized in (_normalize_product(connection, product) for product in raw_products)
-        if normalized.get("status") == "active" and (normalized.get("stock_quantity") or 0) > 0
+        if normalized.get("status") == "active" and _has_sellable_stock(normalized)
     }
     products_by_collection: dict[str, list[str]] = defaultdict(list)
     for collect in collects:
@@ -311,6 +311,12 @@ def _fetch_shopify_collection_payload(connection: EcommerceConnection) -> tuple[
         fetch_shopify_collects(connection, PRODUCT_CATALOG_CACHE_LIMIT),
         fetch_all_products(connection, PRODUCT_CATALOG_CACHE_LIMIT),
     )
+
+def _has_sellable_stock(product: dict) -> bool:
+    stock_quantity = product.get("stock_quantity")
+    if isinstance(stock_quantity, int):
+        return stock_quantity > 0
+    return bool(product.get("in_stock"))
 
 def _selected_shopify_collections(db: Session, connection_id: int) -> dict[str, int] | None:
     rows = db.execute(

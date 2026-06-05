@@ -138,6 +138,8 @@ def _incoming_display_text(event: WebhookEvent, fallback: str) -> str:
         reply = interactive.get("button_reply")
 
     if isinstance(reply, dict):
+        if str(fallback or "").startswith(("catalog category ", "catalog dynamic category ", "catalog page ")):
+            return fallback
         title = str(reply.get("title") or "").strip()
         if title:
             return title

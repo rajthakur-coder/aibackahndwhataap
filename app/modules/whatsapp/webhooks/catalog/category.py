@@ -88,8 +88,9 @@ async def _handle_catalog_category(context: WebhookProcessingContext) -> bool:
         return False
 
     category_page = _selected_catalog_product_page(context.query_text)
-    category_fetch_limit = context.requested_limit + 1
-    category_offset = (category_page - 1) * context.requested_limit
+    page_size = max(context.requested_limit, 10)
+    category_fetch_limit = page_size + 1
+    category_offset = (category_page - 1) * page_size
     with context.timing.stage("shopify_fetch_category_products"):
         category_products_page = await _products_for_catalog_category(
             context.db,
@@ -101,9 +102,9 @@ async def _handle_catalog_category(context: WebhookProcessingContext) -> bool:
 
     has_more_category_products = (
         selected_catalog_category != "best_sellers"
-        and len(category_products_page) > context.requested_limit
+        and len(category_products_page) > page_size
     )
-    category_products = category_products_page[:context.requested_limit]
+    category_products = category_products_page[:page_size]
     if not category_products:
         fallback_text = _localized(
             context.reply_language,

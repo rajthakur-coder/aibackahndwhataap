@@ -97,7 +97,7 @@ def shopify_collection_rows(connection: EcommerceConnection) -> list[dict]:
     in_stock_product_ids = {
         str(normalized.get("shopify_product_id") or normalized.get("external_id") or "")
         for normalized in (_normalize_product(connection, product) for product in products)
-        if normalized.get("status") == "active" and (normalized.get("stock_quantity") or 0) > 0
+        if normalized.get("status") == "active" and _has_sellable_stock(normalized)
     }
     counts: dict[str, int] = {}
     for collect in collects:
@@ -127,6 +127,13 @@ def shopify_collection_rows(connection: EcommerceConnection) -> list[dict]:
             }
         )
     return sorted(rows, key=lambda row: (-int(row["product_count"] or 0), str(row["title"]).lower()))
+
+
+def _has_sellable_stock(product: dict) -> bool:
+    stock_quantity = product.get("stock_quantity")
+    if isinstance(stock_quantity, int):
+        return stock_quantity > 0
+    return bool(product.get("in_stock"))
 
 
 def serialize_contact_store_mapping(row: ContactStoreMapping) -> dict:

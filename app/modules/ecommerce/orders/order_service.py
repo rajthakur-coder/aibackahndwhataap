@@ -147,12 +147,24 @@ def upsert_contact_store_mapping(
     normalized_phone = _digits(phone)
     if not normalized_phone:
         return None
-    mapping = db.execute(
-        select(ContactStoreMapping).where(
-            ContactStoreMapping.tenant_id == connection.tenant_id,
-            ContactStoreMapping.normalized_phone == normalized_phone,
-        )
-    ).scalars().first()
+    for pending in db.new:
+        if (
+            isinstance(pending, ContactStoreMapping)
+            and pending.tenant_id == connection.tenant_id
+            and pending.normalized_phone == normalized_phone
+        ):
+            mapping = pending
+            break
+    else:
+        mapping = None
+    if mapping is None:
+        db.flush()
+        mapping = db.execute(
+            select(ContactStoreMapping).where(
+                ContactStoreMapping.tenant_id == connection.tenant_id,
+                ContactStoreMapping.normalized_phone == normalized_phone,
+            )
+        ).scalars().first()
     if not mapping:
         mapping = ContactStoreMapping(
             tenant_id=connection.tenant_id,
