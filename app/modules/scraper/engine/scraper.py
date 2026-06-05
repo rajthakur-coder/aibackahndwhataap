@@ -1,7 +1,8 @@
 import logging
 from app.config import settings
 from typing import Dict, Any, List, Optional
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse
+import re
 
 logger = logging.getLogger("firecrawl_scraper")
 logger.setLevel(logging.INFO)
@@ -198,18 +199,7 @@ def _infer_social_type(u: str) -> Optional[str]:
 
 
 def _socials_from_links(raw_links: Any) -> List[Dict[str, str]]:
-    links: List[str] = []
-
-    if isinstance(raw_links, list):
-        links = [x for x in raw_links if isinstance(x, str)]
-    elif isinstance(raw_links, dict):
-        for v in raw_links.values():
-            if isinstance(v, list):
-                links.extend([x for x in v if isinstance(x, str)])
-            elif isinstance(v, str):
-                links.append(v)
-    elif isinstance(raw_links, str):
-        links = [raw_links]
+    links = _flatten_link_urls(raw_links)
 
     out: List[Dict[str, str]] = []
     seen = set()
@@ -234,6 +224,94 @@ def _socials_from_links(raw_links: Any) -> List[Dict[str, str]]:
             break
 
     return out
+
+
+POLICY_LINK_TERMS = (
+    "return",
+    "refund",
+    "exchange",
+    "shipping",
+    "delivery",
+    "cancellation",
+    "cancel",
+    "cod",
+    "warranty",
+    "terms",
+)
+FAQ_LINK_TERMS = ("faq", "faqs", "help", "support")
+
+
+def _flatten_link_urls(raw_links: Any) -> List[str]:
+    links: List[str] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, str):
+            links.append(value)
+            return
+        if isinstance(value, dict):
+            for key in ("url", "href", "link"):
+                raw = value.get(key)
+                if isinstance(raw, str):
+                    links.append(raw)
+            for nested in value.values():
+                if isinstance(nested, (list, dict)):
+                    visit(nested)
+            return
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(raw_links)
+    return _dedupe_keep_order(links)
+
+
+def _same_site_url(base_url: str, link: str) -> str:
+    absolute = urljoin(base_url, link)
+    parsed_base = urlparse(base_url)
+    parsed = urlparse(absolute)
+    if not parsed.netloc or parsed.netloc.lower().removeprefix("www.") != parsed_base.netloc.lower().removeprefix("www."):
+        return ""
+    return _canonicalize_url(absolute)
+
+
+def _link_candidates(base_url: str, raw_links: Any, terms: tuple[str, ...], limit: int = 6) -> List[str]:
+    candidates: List[str] = []
+    for link in _flatten_link_urls(raw_links):
+        url = _same_site_url(base_url, link)
+        if not url:
+            continue
+        haystack = url.lower().replace("-", " ").replace("_", " ")
+        if any(term in haystack for term in terms):
+            candidates.append(url)
+    return _dedupe_keep_order(candidates)[:limit]
+
+
+def _scrape_page_text(app, url: str) -> str:
+    try:
+        result = app.scrape(
+            url=url,
+            formats=["markdown"],
+            only_main_content=True,
+            timeout=30000,
+        )
+    except Exception:
+        logger.warning("Could not scrape linked policy page: %s", url, exc_info=True)
+        return ""
+    data = to_dict(get_attr_or_key(result, "data", result) or {})
+    text = data.get("markdown") or data.get("content") or data.get("text") or ""
+    if not isinstance(text, str):
+        return ""
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text[:4000]
+
+
+def _linked_page_context(app, base_url: str, raw_links: Any, terms: tuple[str, ...], title: str) -> str:
+    parts: List[str] = []
+    for link in _link_candidates(base_url, raw_links, terms):
+        text = _scrape_page_text(app, link)
+        if text:
+            parts.append(f"{title} source: {link}\n{text}")
+    return "\n\n".join(parts)[:6000]
 
 
 # ----------------------------
@@ -306,8 +384,11 @@ def scrape_brand_fields_only(url: str) -> Dict[str, Any]:
                 color_palette.append(v.strip())
         color_palette = _dedupe_keep_order(color_palette)
 
-        # Socials
-        socials = _socials_from_links(data.get("links"))
+        # Links, socials, and policy/FAQ page text
+        raw_links = data.get("links")
+        socials = _socials_from_links(raw_links)
+        policies = _linked_page_context(app, url, raw_links, POLICY_LINK_TERMS, "Policy")
+        faqs = _linked_page_context(app, url, raw_links, FAQ_LINK_TERMS, "FAQ")
         
         # ----------------------------
         # Images (Cleaned & Capped)
@@ -329,6 +410,8 @@ def scrape_brand_fields_only(url: str) -> Dict[str, Any]:
             "color_palette": color_palette,
             "socials": socials,
             "page_images": page_images,
+            "policies": policies,
+            "faqs": faqs,
         }
 
     except Exception as e:
@@ -340,4 +423,6 @@ def scrape_brand_fields_only(url: str) -> Dict[str, Any]:
             "color_palette": [],
             "socials": [],
             "page_images": [],
+            "policies": "",
+            "faqs": "",
         }

@@ -136,8 +136,8 @@ async def run_brand_scraper(payload: ScraperInput) -> ScraperResponse:
             color_palette=assets.get("color_palette") or [],
             fonts=assets.get("fonts") or [],
             target_demographics=intelligence.get("target_demographics"),
-            policies=_clean_text(intelligence.get("policies")),
-            faqs=_clean_text(intelligence.get("faqs")),
+            policies=_combined_text(intelligence.get("policies"), assets.get("policies")),
+            faqs=_combined_text(intelligence.get("faqs"), assets.get("faqs")),
             socials=_normalize_socials(assets, intelligence),
             competitors=_normalize_competitors(intelligence),
             page_images=assets.get("page_images") or [],
@@ -152,3 +152,18 @@ def _clean_text(value: object) -> str | None:
         return None
     text = value.strip()
     return text or None
+
+
+def _combined_text(*values: object) -> str | None:
+    parts: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _clean_text(value)
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        parts.append(text)
+    return "\n\n".join(parts)[:6000] or None
