@@ -100,12 +100,15 @@ def shopify_collection_rows(connection: EcommerceConnection) -> list[dict]:
         collection_id = str(collection.get("id") or "")
         if not collection_id:
             continue
+        product_count = counts.get(collection_id, 0)
+        if product_count <= 0:
+            continue
         rows.append(
             {
                 "shopify_collection_id": collection_id,
                 "title": collection.get("title") or collection.get("handle") or collection_id,
                 "handle": collection.get("handle"),
-                "product_count": counts.get(collection_id, 0),
+                "product_count": product_count,
             }
         )
     return sorted(rows, key=lambda row: (-int(row["product_count"] or 0), str(row["title"]).lower()))

@@ -58,12 +58,20 @@ def fetch_shopify_collections(connection: EcommerceConnection, limit: int = 250)
     for path in ("/custom_collections.json", "/smart_collections.json"):
         page_info = None
         while len(collections) < limit:
-            params = {"limit": min(250, limit - len(collections)), "fields": "id,title,handle,updated_at,published_at"}
+            params = {
+                "limit": min(250, limit - len(collections)),
+                "fields": "id,title,handle,updated_at,published_at",
+                "published_status": "published",
+            }
             if page_info:
                 params = {"limit": min(250, limit - len(collections)), "page_info": page_info}
             response = _shopify_request("GET", connection, path, params=params)
             key = "custom_collections" if path.startswith("/custom") else "smart_collections"
-            collections.extend(response.json().get(key, []))
+            collections.extend(
+                collection
+                for collection in response.json().get(key, [])
+                if collection.get("published_at")
+            )
             page_info = _next_page_info(response)
             if not page_info:
                 break
