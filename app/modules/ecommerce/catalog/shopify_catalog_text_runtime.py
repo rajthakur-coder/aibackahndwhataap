@@ -71,6 +71,51 @@ CATALOG_REQUEST_TERMS = {
     "range",
 }
 REQUEST_ACTION_TERMS = {"bhejo", "chahiye", "chaiye", "dekhna", "dikha", "dikhana", "dikhao", "send", "show"}
+PRODUCT_HINT_TERMS = {
+    "airtight",
+    "basket",
+    "bathroom",
+    "bottle",
+    "box",
+    "ceramic",
+    "container",
+    "containers",
+    "cup",
+    "cups",
+    "glass",
+    "holder",
+    "jar",
+    "jars",
+    "kitchen",
+    "lid",
+    "mug",
+    "organiser",
+    "organisers",
+    "organizer",
+    "organizers",
+    "rack",
+    "shelf",
+    "shoe",
+    "shoes",
+    "spoon",
+    "storage",
+    "suction",
+    "tray",
+    "wooden",
+}
+NON_PRODUCT_TERMS = {
+    "cancel",
+    "delivery",
+    "exchange",
+    "order",
+    "policy",
+    "refund",
+    "return",
+    "shipping",
+    "status",
+    "track",
+}
+MEASUREMENT_RE = re.compile(r"\b\d+(?:\.\d+)?\s*(?:cm|mm|m|inch|inches|in|ft|feet|ml|l|ltr|litre|liter|kg|g)\b", re.I)
 
 
 def _extract_order_id(query: str) -> str | None:
@@ -79,7 +124,15 @@ def _extract_order_id(query: str) -> str | None:
 
 def is_catalog_request(query: str) -> bool:
     terms = set(_tokens(query))
-    return bool(terms & CATALOG_REQUEST_TERMS and terms & REQUEST_ACTION_TERMS)
+    if terms & NON_PRODUCT_TERMS and not terms & PRODUCT_HINT_TERMS:
+        return False
+    if terms & CATALOG_REQUEST_TERMS:
+        return True
+    if terms & PRODUCT_HINT_TERMS:
+        return True
+    if terms & REQUEST_ACTION_TERMS and len(terms - REQUEST_ACTION_TERMS) >= 1:
+        return True
+    return bool(MEASUREMENT_RE.search(query or "") and len(terms) >= 2)
 
 def is_image_request(query: str) -> bool:
     return bool(set(_tokens(query)) & IMAGE_REQUEST_TERMS)

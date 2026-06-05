@@ -61,6 +61,7 @@ from app.modules.ecommerce.catalog.catalog_cache_service import (
     find_cached_product_recommendations,
     find_cached_top_selling_products,
 )
+from app.modules.ecommerce.catalog.shopify_cache_service import is_catalog_request as _is_shopify_catalog_request
 from app.modules.whatsapp.client.client_service import (
     send_whatsapp_image,
     send_whatsapp_message,
@@ -168,6 +169,8 @@ async def _handle_recommended_products(context: WebhookProcessingContext) -> boo
     return True
 
 async def _handle_catalog_products(context: WebhookProcessingContext) -> bool:
+    if not _is_product_search_request(context):
+        return False
     product_limit = max(context.requested_limit, 10)
     with context.timing.stage("shopify_catalog_fetch"):
         catalog_products = await find_cached_catalog_products(
@@ -213,6 +216,15 @@ async def _handle_catalog_products(context: WebhookProcessingContext) -> bool:
     )
     await _queue_cross_sell_products(context.db, context.phone, context.query_text, catalog_products)
     return True
+
+def _is_product_search_request(context: WebhookProcessingContext) -> bool:
+    if _is_shopify_catalog_request(context.query_text):
+        return True
+    if context.understanding.intent in {"catalog_request", "image_request", "price_question", "top_selling_products"}:
+        return True
+    if context.understanding.tool == "search_products":
+        return True
+    return False
 
 def _catalog_products_text(phone: str, catalog_products: list[dict]) -> str:
     lines = ["Catalog:"]
