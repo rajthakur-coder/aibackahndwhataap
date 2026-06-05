@@ -21,6 +21,7 @@ class AutomationRuleRequest(BaseModel):
     name: str
     trigger: str
     message_template_id: int | None = None
+    whatsapp_template_id: int | None = None
     message_body: str | None = None
     delay_seconds: int = 0
     conditions: dict | None = None
@@ -31,6 +32,7 @@ class AutomationRuleUpdateRequest(BaseModel):
     name: str | None = None
     trigger: str | None = None
     message_template_id: int | None = None
+    whatsapp_template_id: int | None = None
     message_body: str | None = None
     delay_seconds: int | None = None
     conditions: dict | None = None

@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
@@ -12,7 +13,7 @@ from app.models.automation import (
     MessageTemplate,
 )
 from app.models.crm import AgentAction
-from app.models.whatsapp import Message
+from app.models.whatsapp import Message, WhatsappTemplate
 from app.modules.automation.automation_schema import (
     AbandonedCartRequest,
     AutomationEventRequest,
@@ -33,6 +34,10 @@ TRIGGER_ORDER_DELIVERED = sync_automation.TRIGGER_ORDER_DELIVERED
 TRIGGER_CART_ABANDONED = sync_automation.TRIGGER_CART_ABANDONED
 TRIGGER_COD_VERIFICATION = sync_automation.TRIGGER_COD_VERIFICATION
 TRIGGER_FEEDBACK_REQUEST = sync_automation.TRIGGER_FEEDBACK_REQUEST
+TRIGGER_POST_DISPATCH_CROSS_SELL = sync_automation.TRIGGER_POST_DISPATCH_CROSS_SELL
+TRIGGER_DELIVERED_REVIEW = sync_automation.TRIGGER_DELIVERED_REVIEW
+TRIGGER_REPLENISHMENT = sync_automation.TRIGGER_REPLENISHMENT
+TRIGGER_BROWSE_NO_BUY = sync_automation.TRIGGER_BROWSE_NO_BUY
 
 automation_processor_loop = sync_automation.automation_processor_loop
 enqueue_order_automation_events = sync_automation.enqueue_order_automation_events
@@ -56,14 +61,25 @@ async def create_automation_rule(db: AsyncSession, data: AutomationRuleRequest) 
     tenant_id = normalize_tenant_id(current_tenant_id() or DEFAULT_TENANT_ID)
     if not data.name.strip() or not data.trigger.strip():
         return {"error": "Rule name and trigger are required", "status_code": 400}
-    if not data.message_template_id and not (data.message_body or "").strip():
+    message_template_id = data.message_template_id
+    if data.whatsapp_template_id:
+        template = await _automation_template_from_whatsapp_template(
+            db,
+            data.whatsapp_template_id,
+            data.trigger,
+            tenant_id,
+        )
+        if not template:
+            return {"error": "Approved WhatsApp template not found", "status_code": 404}
+        message_template_id = template.id
+    if not message_template_id and not (data.message_body or "").strip():
         return {"error": "Message template or message body is required", "status_code": 400}
 
     rule = AutomationRule(
         tenant_id=tenant_id,
         name=data.name.strip(),
         trigger=data.trigger.strip(),
-        message_template_id=data.message_template_id,
+        message_template_id=message_template_id,
         message_body=(data.message_body or "").strip() or None,
         delay_seconds=max(0, data.delay_seconds),
         conditions=json.dumps(data.conditions or {}, ensure_ascii=True),
@@ -104,6 +120,16 @@ async def update_automation_rule(
         rule.trigger = data.trigger.strip() or rule.trigger
     if data.message_template_id is not None:
         rule.message_template_id = data.message_template_id
+    if data.whatsapp_template_id is not None:
+        template = await _automation_template_from_whatsapp_template(
+            db,
+            data.whatsapp_template_id,
+            rule.trigger,
+            rule.tenant_id,
+        )
+        if not template:
+            return {"error": "Approved WhatsApp template not found", "status_code": 404}
+        rule.message_template_id = template.id
     if data.message_body is not None:
         rule.message_body = data.message_body.strip() or None
     if data.delay_seconds is not None:
@@ -116,6 +142,75 @@ async def update_automation_rule(
     await db.commit()
     await db.refresh(rule)
     return {"status": "success", "rule": serialize_rule(rule)}
+
+async def _automation_template_from_whatsapp_template(
+    db: AsyncSession,
+    whatsapp_template_id: int,
+    trigger: str,
+    tenant_id: str,
+) -> MessageTemplate | None:
+    whatsapp_template = await db.get(WhatsappTemplate, whatsapp_template_id)
+    if (
+        not whatsapp_template
+        or whatsapp_template.tenant_id != tenant_id
+        or str(whatsapp_template.status or "").upper() != "APPROVED"
+    ):
+        return None
+
+    components = _load_json(whatsapp_template.components, [])
+    body = _whatsapp_template_body(components) or whatsapp_template.name
+    body_variable_order = _body_variable_order_for_trigger(trigger, body)
+    automation_name = f"wa:{whatsapp_template.name}:{whatsapp_template.language}"
+    result = await db.execute(
+        select(MessageTemplate).where(
+            MessageTemplate.tenant_id == tenant_id,
+            MessageTemplate.name == automation_name,
+        )
+    )
+    template = result.scalar_one_or_none()
+    if not template:
+        template = MessageTemplate(tenant_id=tenant_id, name=automation_name, body=body)
+        db.add(template)
+
+    template.body = body
+    template.channel = "whatsapp"
+    template.template_type = "whatsapp_template"
+    template.provider_template_name = whatsapp_template.name
+    template.language = whatsapp_template.language or "en"
+    template.body_variable_order = json.dumps(body_variable_order, ensure_ascii=True)
+    template.status = "active"
+    await db.flush()
+    return template
+
+def _whatsapp_template_body(components) -> str:
+    if not isinstance(components, list):
+        return ""
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        if str(component.get("type") or "").upper() == "BODY":
+            return str(component.get("text") or "").strip()
+    return ""
+
+def _body_variable_order_for_trigger(trigger: str, body: str) -> list[str]:
+    count = len(set(re.findall(r"\{\{\s*(\d+)\s*\}\}", body or "")))
+    if count <= 0:
+        return []
+    defaults = {
+        TRIGGER_CART_ABANDONED: ["customer_name", "cart_url", "total", "currency"],
+        TRIGGER_ORDER_CREATED: ["customer_name", "order_number", "total", "currency"],
+        TRIGGER_ORDER_PAID: ["customer_name", "order_number", "total", "currency"],
+        TRIGGER_ORDER_SHIPPED: ["customer_name", "order_number"],
+        TRIGGER_ORDER_DELIVERED: ["customer_name", "order_number"],
+        TRIGGER_FEEDBACK_REQUEST: ["customer_name", "order_number"],
+        TRIGGER_COD_VERIFICATION: ["customer_name", "order_number", "total", "currency"],
+        TRIGGER_POST_DISPATCH_CROSS_SELL: ["customer_name", "product_name"],
+        TRIGGER_DELIVERED_REVIEW: ["customer_name", "order_number"],
+        TRIGGER_REPLENISHMENT: ["customer_name", "product_name"],
+        TRIGGER_BROWSE_NO_BUY: ["customer_name"],
+    }
+    fallback = [f"var_{index}" for index in range(1, count + 1)]
+    return (defaults.get(trigger) or fallback)[:count]
 
 def _conditions_match(rule: AutomationRule, payload: dict) -> bool:
     conditions = _load_json(rule.conditions, {})

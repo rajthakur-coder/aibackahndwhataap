@@ -194,6 +194,8 @@ def _template_button_parameters(template: MessageTemplate, context: dict) -> lis
     }
     if template_name.endswith("_abandoned_cart_recovery"):
         button_orders[template_name] = ["cart_token"]
+    if context.get("trigger") == TRIGGER_CART_ABANDONED:
+        button_orders.setdefault(template_name, ["cart_token"])
     values = []
     for variable in button_orders.get(template_name, []):
         value = _get_path(context, variable)
