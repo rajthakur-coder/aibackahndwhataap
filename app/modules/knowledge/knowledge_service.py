@@ -1,4 +1,5 @@
 import json
+import re
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -63,7 +64,7 @@ def save_knowledge_base(db: Session, data: KnowledgeBaseRequest, tenant_id: str 
     row.logo = (data.logo or "").strip() or None
     row.socials = _json_dumps(data.socials)
     row.page_images = _json_dumps(data.page_images)
-    row.policies = (data.policies or "").strip() or None
+    row.policies = _clean_knowledge_text(data.policies, kind="policies")
     row.faqs = (data.faqs or "").strip() or None
     db.commit()
     db.refresh(row)
@@ -107,3 +108,93 @@ def knowledge_context(db: Session, message: str = "", tenant_id: str = DEFAULT_T
         parts.append(f"FAQs: {row.faqs[:1200]}")
 
     return "\n".join(parts)[:5000]
+
+
+def _clean_knowledge_text(text: str | None, *, kind: str = "text") -> str | None:
+    noisy_terms = (
+        "skip to content",
+        "your cart is empty",
+        "continue shopping",
+        "have an account?",
+        "log in",
+        "your cart",
+        "loading",
+        "estimated total",
+        "check out",
+        "checkout",
+        "taxes included",
+        "prepaid orders",
+        "extra 5% off",
+        "payday",
+        "sale is live",
+        "opens in a new window",
+        "is blocked",
+        "err_blocked_by_client",
+        "base64-image-removed",
+        "top selling",
+    )
+    clean_lines = []
+    for line in str(text or "").splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        lowered = candidate.lower()
+        if lowered.startswith("![") or lowered.startswith("[](") or lowered.startswith("[skip"):
+            continue
+        if re.fullmatch(r"(?:₹|rs\.?)\s*0(?:\.00)?", lowered):
+            continue
+        if any(term in lowered for term in noisy_terms):
+            continue
+        clean_lines.append(candidate)
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(clean_lines)).strip()
+    if kind == "policies":
+        cleaned = _prioritize_policy_sections(cleaned)
+    return cleaned or None
+
+
+def _prioritize_policy_sections(text: str) -> str:
+    sections = _split_policy_sections(text)
+    if not sections:
+        return text[:6000]
+    priority = (
+        "return",
+        "exchange",
+        "refund",
+        "shipping",
+        "delivery",
+        "cancel",
+        "warranty",
+        "cod",
+    )
+    picked = []
+    for section in sections:
+        lowered = section.lower()
+        if any(term in lowered for term in priority):
+            picked.append(section)
+    picked = sorted(picked or sections, key=_policy_section_rank)
+    return "\n\n".join(picked)[:6000]
+
+
+def _policy_section_rank(section: str) -> int:
+    lowered = section.lower()
+    if any(term in lowered for term in ("return", "exchange", "refund")):
+        return 0
+    if any(term in lowered for term in ("shipping", "delivery")):
+        return 1
+    if "cancel" in lowered:
+        return 2
+    if "warranty" in lowered:
+        return 3
+    if "cod" in lowered:
+        return 4
+    return 9
+
+
+def _split_policy_sections(text: str) -> list[str]:
+    raw_sections = re.split(r"(?=Policy source:\s*https?://)", text)
+    sections = []
+    for section in raw_sections:
+        cleaned = section.strip()
+        if cleaned:
+            sections.append(cleaned)
+    return sections

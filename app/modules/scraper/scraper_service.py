@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from typing import Any
 
 import anyio
@@ -166,4 +167,64 @@ def _combined_text(*values: object) -> str | None:
             continue
         seen.add(key)
         parts.append(text)
-    return "\n\n".join(parts)[:6000] or None
+    return _clean_scraped_policy_text("\n\n".join(parts))[:6000] or None
+
+
+def _clean_scraped_policy_text(text: str) -> str:
+    noisy_terms = (
+        "skip to content",
+        "your cart is empty",
+        "continue shopping",
+        "have an account?",
+        "log in",
+        "your cart",
+        "loading",
+        "estimated total",
+        "check out",
+        "checkout",
+        "taxes included",
+        "prepaid orders",
+        "extra 5% off",
+        "payday",
+        "sale is live",
+        "opens in a new window",
+        "is blocked",
+        "err_blocked_by_client",
+        "base64-image-removed",
+        "top selling",
+    )
+    lines = []
+    for line in str(text or "").splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        lowered = candidate.lower()
+        if lowered.startswith("![") or lowered.startswith("[skip"):
+            continue
+        if re.fullmatch(r"(?:₹|rs\.?)\s*0(?:\.00)?", lowered):
+            continue
+        if any(term in lowered for term in noisy_terms):
+            continue
+        lines.append(candidate)
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    sections = [section.strip() for section in re.split(r"(?=Policy source:\s*https?://)", cleaned) if section.strip()]
+    if not sections:
+        return cleaned
+    policy_terms = ("return", "exchange", "refund", "shipping", "delivery", "cancel", "warranty", "cod")
+    picked = [section for section in sections if any(term in section.lower() for term in policy_terms)]
+    return "\n\n".join(sorted(picked or sections, key=_policy_section_rank)).strip()
+
+
+def _policy_section_rank(section: str) -> int:
+    lowered = section.lower()
+    if any(term in lowered for term in ("return", "exchange", "refund")):
+        return 0
+    if any(term in lowered for term in ("shipping", "delivery")):
+        return 1
+    if "cancel" in lowered:
+        return 2
+    if "warranty" in lowered:
+        return 3
+    if "cod" in lowered:
+        return 4
+    return 9
