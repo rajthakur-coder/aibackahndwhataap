@@ -163,8 +163,9 @@ def _send_rule_message(
             language=template.language or "en",
             body_parameters=_template_body_parameters(template, context),
             button_url_parameters=_template_button_parameters(template, context),
+            tenant_id=rule.tenant_id,
         )
-    return send_whatsapp_message(phone, rendered_message)
+    return send_whatsapp_message(phone, rendered_message, tenant_id=rule.tenant_id)
 
 def _message_context(event: AutomationEvent) -> dict:
     payload = _load_json(event.payload, {})

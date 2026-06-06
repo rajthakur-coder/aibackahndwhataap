@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+from app.models.automation import MessageTemplate
+from app.modules.automation.events import event_service
 from app.modules.automation.events.event_service import _db_naive, _utcnow_like
 from app.modules.automation.runtime import sync_service
 
@@ -15,3 +17,38 @@ def test_automation_event_time_helpers_match_datetime_awareness():
 
 def test_sync_service_exports_template_button_parameters():
     assert callable(sync_service._template_button_parameters)
+    assert callable(sync_service._template_body_parameters)
+
+
+def test_automation_send_passes_event_tenant_to_whatsapp_template(monkeypatch):
+    captured = {}
+
+    def fake_send_template(*args, **kwargs):
+        captured["args"] = args
+        return {"ok": True}
+
+    monkeypatch.setattr(event_service, "send_whatsapp_template", fake_send_template)
+    template = MessageTemplate(
+        tenant_id="brand-a",
+        name="abandoned_cart_recovery",
+        provider_template_name="abandoned_cart_recovery",
+        template_type="whatsapp_template",
+        language="en",
+        body="Hi {{customer_name}}",
+        body_variable_order='["customer_name"]',
+    )
+
+    import asyncio
+
+    result = asyncio.run(
+        event_service._send_message(
+            template,
+            "919999999999",
+            "Hi Riya",
+            {"customer_name": "Riya", "trigger": "cart_abandoned", "cart_token": "abc"},
+            "brand-a",
+        )
+    )
+
+    assert result == {"ok": True}
+    assert captured["args"][-1] == "brand-a"

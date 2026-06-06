@@ -13,8 +13,9 @@ def send_whatsapp_template(
     language: str = "en",
     body_parameters: list[str] | None = None,
     button_url_parameters: list[str] | None = None,
+    tenant_id: str | None = None,
 ) -> dict:
-    credentials = resolve_whatsapp_client_credentials()
+    credentials = resolve_whatsapp_client_credentials(tenant_id=tenant_id)
 
     if not phone or not template_name:
         raise ValueError("Phone and template name are required")

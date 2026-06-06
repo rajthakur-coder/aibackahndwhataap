@@ -240,8 +240,9 @@ async def _send_message(
             template.language or "en",
             _template_parameters(template, context),
             sync_automation._template_button_parameters(template, context),
+            template.tenant_id,
         )
-    return await run_in_threadpool(send_whatsapp_message, phone, message)
+    return await run_in_threadpool(send_whatsapp_message, phone, message, template.tenant_id if template else None)
 
 __all__ = [
     "create_automation_rule",

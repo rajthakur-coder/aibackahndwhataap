@@ -10,8 +10,8 @@ REQUEST_TIMEOUT = 20
 from app.modules.whatsapp.client.interactive_client_service import *
 from app.modules.whatsapp.templates.template_client_service import *
 
-def mark_whatsapp_message_read_with_typing(message_id: str) -> dict:
-    credentials = resolve_whatsapp_client_credentials()
+def mark_whatsapp_message_read_with_typing(message_id: str, tenant_id: str | None = None) -> dict:
+    credentials = resolve_whatsapp_client_credentials(tenant_id=tenant_id)
 
     if not message_id:
         raise ValueError("Message ID is required")
@@ -41,8 +41,8 @@ def mark_whatsapp_message_read_with_typing(message_id: str) -> dict:
     return response.json()
 
 
-def send_whatsapp_message(phone: str, message: str) -> dict:
-    credentials = resolve_whatsapp_client_credentials()
+def send_whatsapp_message(phone: str, message: str, tenant_id: str | None = None) -> dict:
+    credentials = resolve_whatsapp_client_credentials(tenant_id=tenant_id)
 
     if not phone or not message:
         raise ValueError("Phone and message are required")
@@ -72,8 +72,13 @@ def send_whatsapp_message(phone: str, message: str) -> dict:
     return response.json()
 
 
-def send_whatsapp_image(phone: str, image_url: str, caption: str | None = None) -> dict:
-    credentials = resolve_whatsapp_client_credentials()
+def send_whatsapp_image(
+    phone: str,
+    image_url: str,
+    caption: str | None = None,
+    tenant_id: str | None = None,
+) -> dict:
+    credentials = resolve_whatsapp_client_credentials(tenant_id=tenant_id)
 
     if not phone or not image_url:
         raise ValueError("Phone and image URL are required")
