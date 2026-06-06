@@ -147,6 +147,7 @@ def serialize_rule(rule: AutomationRule) -> dict:
         "message_body": rule.message_body,
         "delay_seconds": rule.delay_seconds,
         "conditions": _load_json(rule.conditions, {}),
+        "variable_mappings": _load_json(rule.variable_mappings, {}),
         "enabled": db_to_bool(rule.enabled),
         "created_at": str(rule.created_at),
         "updated_at": str(rule.updated_at),

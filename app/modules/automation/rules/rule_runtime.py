@@ -155,17 +155,22 @@ def _send_rule_message(
     context: dict,
 ) -> dict:
     template = _rule_template(db, rule)
+    variable_mappings = _rule_variable_mappings(rule)
     if template and template.template_type == "whatsapp_template":
         template_name = template.provider_template_name or template.name
         return send_whatsapp_template(
             phone,
             template_name,
             language=template.language or "en",
-            body_parameters=_template_body_parameters(template, context),
-            button_url_parameters=_template_button_parameters(template, context),
+            body_parameters=_template_body_parameters(template, context, variable_mappings),
+            button_url_parameters=_template_button_parameters(template, context, variable_mappings),
             tenant_id=rule.tenant_id,
         )
     return send_whatsapp_message(phone, rendered_message, tenant_id=rule.tenant_id)
+
+def _rule_variable_mappings(rule: AutomationRule) -> dict:
+    value = _load_json(rule.variable_mappings, {})
+    return value if isinstance(value, dict) else {}
 
 def _message_context(event: AutomationEvent) -> dict:
     payload = _load_json(event.payload, {})
@@ -185,5 +190,6 @@ __all__ = [
     "_rule_template",
     "_rule_body",
     "_send_rule_message",
+    "_rule_variable_mappings",
     "_message_context",
 ]

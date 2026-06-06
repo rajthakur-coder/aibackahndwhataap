@@ -15,4 +15,5 @@ class AutomationRule(TimestampMixin, Base):
     message_body = Column(Text, nullable=True)
     delay_seconds = Column(Integer, default=0)
     conditions = Column(Text, nullable=True)
+    variable_mappings = Column(Text, nullable=True)
     enabled = Column(String, default="true", index=True)

@@ -43,6 +43,7 @@ def test_automation_send_passes_event_tenant_to_whatsapp_template(monkeypatch):
     result = asyncio.run(
         event_service._send_message(
             template,
+            type("Rule", (), {"variable_mappings": None})(),
             "919999999999",
             "Hi Riya",
             {"customer_name": "Riya", "trigger": "cart_abandoned", "cart_token": "abc"},
@@ -70,3 +71,22 @@ def test_cart_abandoned_template_without_button_does_not_send_button_parameter()
 
     assert sync_service._template_body_parameters(template, context) == ["Riya", "Phone Case"]
     assert sync_service._template_button_parameters(template, context) == []
+
+
+def test_shipping_tracking_template_uses_tracking_number_button():
+    template = MessageTemplate(
+        name="wa:order_tracking:en",
+        provider_template_name="order_tracking",
+        body="Hi {{1}}, order #{{2}} Product: {{3}} Price: {{4}}",
+        body_variable_order='["customer_name", "order_number", "product_name", "total"]',
+    )
+    context = {
+        "customer_name": "Riya",
+        "order_number": "#1234",
+        "product_name": "Lamp",
+        "total": "999",
+        "tracking_number": "SF123",
+    }
+
+    assert sync_service._template_body_parameters(template, context) == ["Riya", "#1234", "Lamp", "999"]
+    assert sync_service._template_button_parameters(template, context) == ["SF123"]

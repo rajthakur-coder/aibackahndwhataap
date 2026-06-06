@@ -83,6 +83,7 @@ async def create_automation_rule(db: AsyncSession, data: AutomationRuleRequest) 
         message_body=(data.message_body or "").strip() or None,
         delay_seconds=max(0, data.delay_seconds),
         conditions=json.dumps(data.conditions or {}, ensure_ascii=True),
+        variable_mappings=json.dumps(data.variable_mappings or {}, ensure_ascii=True),
         enabled=bool_to_db(data.enabled),
     )
     db.add(rule)
@@ -136,6 +137,8 @@ async def update_automation_rule(
         rule.delay_seconds = max(0, data.delay_seconds)
     if data.conditions is not None:
         rule.conditions = json.dumps(data.conditions, ensure_ascii=True)
+    if data.variable_mappings is not None:
+        rule.variable_mappings = json.dumps(data.variable_mappings, ensure_ascii=True)
     if data.enabled is not None:
         rule.enabled = bool_to_db(data.enabled)
 
@@ -196,6 +199,10 @@ def _body_variable_order_for_trigger(trigger: str, body: str) -> list[str]:
     count = len(set(re.findall(r"\{\{\s*(\d+)\s*\}\}", body or "")))
     if count <= 0:
         return []
+    body_text = str(body or "").lower()
+    if trigger in {TRIGGER_ORDER_CREATED, TRIGGER_ORDER_PAID, TRIGGER_ORDER_SHIPPED}:
+        if "product" in body_text and ("price" in body_text or "total" in body_text):
+            return ["customer_name", "order_number", "product_name", "total"][:count]
     defaults = {
         TRIGGER_CART_ABANDONED: ["customer_name", "product_name", "total", "currency"],
         TRIGGER_ORDER_CREATED: ["customer_name", "order_number", "total", "currency"],
@@ -231,6 +238,7 @@ async def _send_message(
     phone: str,
     message: str,
     context: dict,
+    variable_mappings: dict | None = None,
 ) -> dict:
     if template and template.template_type == "whatsapp_template":
         return await run_in_threadpool(
@@ -238,8 +246,8 @@ async def _send_message(
             phone,
             template.provider_template_name or template.name,
             template.language or "en",
-            _template_parameters(template, context),
-            sync_automation._template_button_parameters(template, context),
+            sync_automation._template_body_parameters(template, context, variable_mappings),
+            sync_automation._template_button_parameters(template, context, variable_mappings),
             template.tenant_id,
         )
     return await run_in_threadpool(send_whatsapp_message, phone, message, template.tenant_id if template else None)

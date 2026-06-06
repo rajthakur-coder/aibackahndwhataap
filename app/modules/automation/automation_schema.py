@@ -25,6 +25,7 @@ class AutomationRuleRequest(BaseModel):
     message_body: str | None = None
     delay_seconds: int = 0
     conditions: dict | None = None
+    variable_mappings: dict | None = None
     enabled: bool = True
 
 
@@ -36,6 +37,7 @@ class AutomationRuleUpdateRequest(BaseModel):
     message_body: str | None = None
     delay_seconds: int | None = None
     conditions: dict | None = None
+    variable_mappings: dict | None = None
     enabled: bool | None = None
 
 

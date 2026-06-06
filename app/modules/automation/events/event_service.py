@@ -272,7 +272,7 @@ async def _process_event(db: AsyncSession, event: AutomationEvent) -> dict:
             continue
 
         try:
-            response = await _send_message(template, execution.phone, message, payload, event.tenant_id)
+            response = await _send_message(template, rule, execution.phone, message, payload, event.tenant_id)
             execution.status = "sent"
             execution.provider_response = json.dumps(response, ensure_ascii=True)
             execution.sent_at = _utcnow_naive()
@@ -350,19 +350,21 @@ async def _abandoned_cart_was_converted(db: AsyncSession, event: AutomationEvent
 
 async def _send_message(
     template: MessageTemplate | None,
+    rule: AutomationRule,
     phone: str,
     message: str,
     context: dict,
     tenant_id: str,
 ) -> dict:
+    variable_mappings = sync_automation._rule_variable_mappings(rule)
     if template and template.template_type == "whatsapp_template":
         return await run_in_threadpool(
             send_whatsapp_template,
             phone,
             template.provider_template_name or template.name,
             template.language or "en",
-            sync_automation._template_body_parameters(template, context),
-            sync_automation._template_button_parameters(template, context),
+            sync_automation._template_body_parameters(template, context, variable_mappings),
+            sync_automation._template_button_parameters(template, context, variable_mappings),
             tenant_id,
         )
     return await run_in_threadpool(send_whatsapp_message, phone, message, tenant_id)

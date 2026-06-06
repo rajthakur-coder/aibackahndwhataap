@@ -169,6 +169,7 @@ __all__ = [
     "_template_body_parameters",
     "_template_button_parameters",
     "_send_rule_message",
+    "_rule_variable_mappings",
     "_message_context",
     "_last_url_segment",
 ]

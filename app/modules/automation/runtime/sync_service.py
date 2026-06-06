@@ -28,6 +28,7 @@ from app.modules.automation.runtime.engine_service import (
     serialize_template,
     _template_body_parameters,
     _template_button_parameters,
+    _rule_variable_mappings,
     triggers_for_order,
 )
 
@@ -61,5 +62,6 @@ __all__ = [
     "serialize_template",
     "_template_body_parameters",
     "_template_button_parameters",
+    "_rule_variable_mappings",
     "triggers_for_order",
 ]

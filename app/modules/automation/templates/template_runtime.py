@@ -195,9 +195,13 @@ def render_template(body: str, context: dict) -> str:
 
     return VARIABLE_RE.sub(replace, body or "").strip()
 
-def _template_body_parameters(template: MessageTemplate, context: dict) -> list[str]:
+def _template_body_parameters(
+    template: MessageTemplate,
+    context: dict,
+    variable_order: list[str] | dict | None = None,
+) -> list[str]:
     context = _enrich_message_context(context)
-    variable_order = _load_json(template.body_variable_order, [])
+    variable_order = _body_variable_order(template, variable_order)
     if not isinstance(variable_order, list):
         return []
     values = []
@@ -219,20 +223,39 @@ def _template_body_parameters(template: MessageTemplate, context: dict) -> list[
             values.append(str(value))
     return values
 
-def _template_button_parameters(template: MessageTemplate, context: dict) -> list[str]:
+def _body_variable_order(template: MessageTemplate, variable_order: list[str] | dict | None = None) -> list[str]:
+    if isinstance(variable_order, dict):
+        variable_order = variable_order.get("body")
+    if isinstance(variable_order, list):
+        return [str(item) for item in variable_order if isinstance(item, str) and item.strip()]
+    return _load_json(template.body_variable_order, [])
+
+def _template_button_parameters(
+    template: MessageTemplate,
+    context: dict,
+    variable_order: list[str] | dict | None = None,
+) -> list[str]:
     context = _enrich_message_context(context)
     template_name = template.provider_template_name or template.name
+    explicit_order = variable_order.get("buttons") if isinstance(variable_order, dict) else None
     button_orders = {
         "shipping_update": ["order_number"],
+        "order_tracking": ["tracking_number"],
+        "order_placed": ["tracking_number"],
         "abandoned_cart_recovery": ["cart_token"],
     }
     if template_name.endswith("_abandoned_cart_recovery"):
         button_orders[template_name] = ["cart_token"]
     values = []
-    for variable in button_orders.get(template_name, []):
+    variables = explicit_order if isinstance(explicit_order, list) else button_orders.get(template_name, [])
+    for variable in variables:
+        if not isinstance(variable, str):
+            continue
         value = _get_path(context, variable)
         if value is None and variable == "cart_token":
             value = context.get("external_id") or context.get("cart_url")
+        if value is None and variable == "tracking_number":
+            value = context.get("tracking_url") or context.get("order_number")
         if value is None:
             value = ""
         if variable == "order_number":
@@ -258,6 +281,7 @@ __all__ = [
     "_enrich_message_context",
     "render_template",
     "_template_body_parameters",
+    "_body_variable_order",
     "_template_button_parameters",
     "_last_url_segment",
 ]
