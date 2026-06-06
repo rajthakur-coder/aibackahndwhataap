@@ -139,12 +139,16 @@ def _get_order_status(
             prompt = f"I could not find order {order_id}. Please check the order ID or share your phone number."
         return ToolCallResult("get_order_status", "not_found", prompt, {"order_id": order_id})
 
+    raw_payload = _json_loads(getattr(order, "raw_payload", None), {})
     data = {
         "id": order.id,
         "order_number": order.order_number,
         "status": order.status,
         "fulfillment_status": order.fulfillment_status,
         "financial_status": order.financial_status,
+        "cancelled_at": raw_payload.get("cancelled_at"),
+        "cancel_reason": raw_payload.get("cancel_reason"),
+        "closed_at": raw_payload.get("closed_at"),
         "shipment_status": order.shipment_status,
         "delivery_status": order.delivery_status,
         "tracking_number": order.tracking_number,

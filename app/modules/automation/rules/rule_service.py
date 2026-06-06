@@ -101,9 +101,17 @@ async def list_automation_rules(db: AsyncSession, trigger: str | None = None) ->
             .order_by(AutomationRule.created_at.desc())
         )
     result = await db.execute(statement)
+    rows = result.scalars().all()
+    template_ids = {row.message_template_id for row in rows if row.message_template_id}
+    templates = {}
+    if template_ids:
+        template_result = await db.execute(
+            select(MessageTemplate).where(MessageTemplate.tenant_id == tenant_id, MessageTemplate.id.in_(template_ids))
+        )
+        templates = {template.id: template for template in template_result.scalars().all()}
     return [
-        {**serialize_rule(row), "sr_no": index}
-        for index, row in enumerate(result.scalars().all(), start=1)
+        {**serialize_rule(row), **_template_metadata(templates.get(row.message_template_id)), "sr_no": index}
+        for index, row in enumerate(rows, start=1)
     ]
 
 async def update_automation_rule(
@@ -119,20 +127,26 @@ async def update_automation_rule(
         rule.name = data.name.strip() or rule.name
     if data.trigger is not None:
         rule.trigger = data.trigger.strip() or rule.trigger
-    if data.message_template_id is not None:
+    provided_fields = _provided_fields(data)
+
+    if "message_template_id" in provided_fields:
         rule.message_template_id = data.message_template_id
-    if data.whatsapp_template_id is not None:
-        template = await _automation_template_from_whatsapp_template(
-            db,
-            data.whatsapp_template_id,
-            rule.trigger,
-            rule.tenant_id,
-        )
-        if not template:
-            return {"error": "Approved WhatsApp template not found", "status_code": 404}
-        rule.message_template_id = template.id
-    if data.message_body is not None:
-        rule.message_body = data.message_body.strip() or None
+    if "whatsapp_template_id" in provided_fields:
+        if data.whatsapp_template_id is None:
+            rule.message_template_id = None
+        else:
+            template = await _automation_template_from_whatsapp_template(
+                db,
+                data.whatsapp_template_id,
+                rule.trigger,
+                rule.tenant_id,
+            )
+            if not template:
+                return {"error": "Approved WhatsApp template not found", "status_code": 404}
+            rule.message_template_id = template.id
+    if "message_body" in provided_fields:
+        rule.message_body = data.message_body.strip() if data.message_body is not None else None
+        rule.message_body = rule.message_body or None
     if data.delay_seconds is not None:
         rule.delay_seconds = max(0, data.delay_seconds)
     if data.conditions is not None:
@@ -145,6 +159,22 @@ async def update_automation_rule(
     await db.commit()
     await db.refresh(rule)
     return {"status": "success", "rule": serialize_rule(rule)}
+
+def _provided_fields(data) -> set[str]:
+    return set(getattr(data, "model_fields_set", getattr(data, "__fields_set__", set())))
+
+def _template_metadata(template: MessageTemplate | None) -> dict:
+    if not template:
+        return {
+            "message_template_type": None,
+            "provider_template_name": None,
+            "template_language": None,
+        }
+    return {
+        "message_template_type": template.template_type,
+        "provider_template_name": template.provider_template_name,
+        "template_language": template.language,
+    }
 
 async def _automation_template_from_whatsapp_template(
     db: AsyncSession,

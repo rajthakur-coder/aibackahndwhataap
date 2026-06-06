@@ -215,6 +215,10 @@ def find_order_for_customer(
         statement = statement.where(EcommerceOrder.tenant_id == tenant_id)
 
     cached = db.execute(statement.order_by(EcommerceOrder.updated_at.desc())).scalars().first()
+    if not order_id:
+        live_order = _find_live_order_for_customer(db, phone, order_id, tenant_id)
+        if live_order:
+            return live_order
     if cached:
         return cached
     if order_id:

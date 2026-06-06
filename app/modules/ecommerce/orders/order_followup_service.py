@@ -18,8 +18,16 @@ DELIVERED_STATUSES = {"delivered"}
 from app.modules.ecommerce.orders.order_normalizer_service import *
 
 def order_status_text(order: EcommerceOrder) -> str:
-    status = order.fulfillment_status or order.status or "received"
-    parts = [f"Your order {order.order_number} status is {status}."]
+    status = order.delivery_status or order.shipment_status or order.fulfillment_status or order.status
+    if status:
+        parts = [f"Your order {order.order_number} status is {status}."]
+    elif order.financial_status:
+        parts = [
+            f"Your order {order.order_number} payment status is {order.financial_status}. "
+            "Fulfillment status is not available yet."
+        ]
+    else:
+        parts = [f"I could not confirm the latest status for order {order.order_number} right now."]
     if order.tracking_number:
         parts.append(f"Tracking number: {order.tracking_number}.")
     if order.tracking_url:

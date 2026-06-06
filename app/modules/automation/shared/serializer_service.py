@@ -139,11 +139,15 @@ def serialize_template(template: MessageTemplate) -> dict:
     }
 
 def serialize_rule(rule: AutomationRule) -> dict:
+    template = getattr(rule, "message_template", None)
     return {
         "id": rule.id,
         "name": rule.name,
         "trigger": rule.trigger,
         "message_template_id": rule.message_template_id,
+        "message_template_type": getattr(template, "template_type", None),
+        "provider_template_name": getattr(template, "provider_template_name", None),
+        "template_language": getattr(template, "language", None),
         "message_body": rule.message_body,
         "delay_seconds": rule.delay_seconds,
         "conditions": _load_json(rule.conditions, {}),

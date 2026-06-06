@@ -237,13 +237,33 @@ async def _send_track_status_or_prompt(context: WebhookProcessingContext) -> boo
 
 async def _send_order_status(context: WebhookProcessingContext, data: dict) -> None:
     order_number = data.get("order_number") or data.get("id")
-    status = data.get("delivery_status") or data.get("shipment_status") or data.get("fulfillment_status") or data.get("status") or "received"
-    parts = [f"Your order {order_number} status is {str(status).lower()}."]
+    parts = [_order_status_sentence(data, order_number)]
     if data.get("tracking_number"):
         parts.append(f"Tracking number: {data.get('tracking_number')}.")
     if data.get("tracking_url"):
         parts.append(f"Track here: {data.get('tracking_url')}")
     await _send_text(context, " ".join(parts))
+
+
+def _order_status_sentence(data: dict, order_number: str) -> str:
+    status = _order_status_label(data)
+    if status:
+        return f"Your order {order_number} status is {str(status).lower()}."
+    financial_status = str(data.get("financial_status") or "").strip()
+    if financial_status:
+        return f"Your order {order_number} payment status is {financial_status.lower()}. Fulfillment status is not available yet."
+    return f"I could not confirm the latest status for order {order_number} right now."
+
+
+def _order_status_label(data: dict) -> str | None:
+    status_values = {
+        str(data.get("status") or "").strip().lower(),
+        str(data.get("fulfillment_status") or "").strip().lower(),
+        str(data.get("financial_status") or "").strip().lower(),
+    }
+    if data.get("cancelled_at") or data.get("cancel_reason") or status_values & {"cancelled", "canceled", "voided"}:
+        return "cancelled"
+    return data.get("delivery_status") or data.get("shipment_status") or data.get("fulfillment_status") or data.get("status")
 
 
 async def _send_return_order_or_reason_list(context: WebhookProcessingContext) -> bool:

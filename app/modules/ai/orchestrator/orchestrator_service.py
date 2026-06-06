@@ -207,14 +207,7 @@ def _deterministic_reply(tool_result: ToolCallResult) -> str | None:
         return None
 
     order_number = tool_result.data.get("order_number") or tool_result.data.get("id") or "your order"
-    status = (
-        tool_result.data.get("fulfillment_status")
-        or tool_result.data.get("shipment_status")
-        or tool_result.data.get("delivery_status")
-        or tool_result.data.get("status")
-        or "received"
-    )
-    parts = [f"Your order {order_number} status is {status}."]
+    parts = [_order_status_sentence(tool_result.data, order_number)]
     if tool_result.data.get("tracking_number"):
         parts.append(f"Tracking number: {tool_result.data['tracking_number']}.")
     if tool_result.data.get("tracking_url"):
@@ -224,3 +217,29 @@ def _deterministic_reply(tool_result: ToolCallResult) -> str | None:
     if total:
         parts.append(f"Total: {total}{f' {currency}' if currency else ''}")
     return " ".join(parts).strip()
+
+
+def _order_status_sentence(data: dict, order_number: str) -> str:
+    status = _order_status_label(data)
+    if status:
+        return f"Your order {order_number} status is {status}."
+    financial_status = str(data.get("financial_status") or "").strip()
+    if financial_status:
+        return f"Your order {order_number} payment status is {financial_status}. Fulfillment status is not available yet."
+    return f"I could not confirm the latest status for order {order_number} right now."
+
+
+def _order_status_label(data: dict) -> str | None:
+    status_values = {
+        str(data.get("status") or "").strip().lower(),
+        str(data.get("fulfillment_status") or "").strip().lower(),
+        str(data.get("financial_status") or "").strip().lower(),
+    }
+    if data.get("cancelled_at") or data.get("cancel_reason") or status_values & {"cancelled", "canceled", "voided"}:
+        return "cancelled"
+    return (
+        data.get("delivery_status")
+        or data.get("shipment_status")
+        or data.get("fulfillment_status")
+        or data.get("status")
+    )

@@ -54,6 +54,15 @@ def _tracking_values_from_shopify(order: dict) -> tuple[list[str], list[str], st
             shipment_statuses.append(fulfillment.get("shipment_status"))
     return numbers, urls, companies[0] if companies else None, shipment_statuses[0] if shipment_statuses else None
 
+def _shopify_order_status(order: dict) -> str | None:
+    if order.get("cancelled_at") or order.get("cancel_reason"):
+        return "cancelled"
+    financial_status = str(order.get("financial_status") or "").strip().lower()
+    if financial_status in {"voided", "cancelled", "canceled"}:
+        return "cancelled"
+    fulfillment_status = str(order.get("fulfillment_status") or "").strip()
+    return fulfillment_status or order.get("status")
+
 def _shopify_customer_name(customer: dict, shipping: dict | None = None) -> str | None:
     shipping = shipping or {}
     first = shipping.get("first_name") or customer.get("first_name") or ""
@@ -75,6 +84,7 @@ def _normalize_shopify_order(order: dict) -> dict:
         for item in order.get("line_items", [])
     ]
     customer = order.get("customer") or {}
+    status = _shopify_order_status(order)
     return {
         "external_id": str(order.get("id")),
         "shopify_order_id": str(order.get("id")),
@@ -87,7 +97,7 @@ def _normalize_shopify_order(order: dict) -> dict:
         "note": order.get("note"),
         "shipping_address": order.get("shipping_address") or {},
         "billing_address": order.get("billing_address") or {},
-        "status": order.get("fulfillment_status") or "received",
+        "status": status,
         "fulfillment_status": order.get("fulfillment_status"),
         "financial_status": order.get("financial_status"),
         "subtotal": str(order.get("subtotal_price") or ""),
@@ -175,6 +185,7 @@ __all__ = [
     "_tracking_from_shopify",
     "_tracking_values_from_shopify",
     "_shopify_customer_name",
+    "_shopify_order_status",
     "_normalize_shopify_order",
     "_normalize_woocommerce_order",
     "_normalize_order",

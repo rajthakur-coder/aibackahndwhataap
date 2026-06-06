@@ -12,6 +12,12 @@ from app.modules.ecommerce.shared.token_service import (
 
 REQUEST_TIMEOUT = 30
 SHOPIFY_API_VERSION = "2025-04"
+SHOPIFY_ORDER_FIELDS = (
+    "id,name,email,phone,tags,note,subtotal_price,total_price,total_discounts,total_tax,"
+    "currency,financial_status,fulfillment_status,cancelled_at,cancel_reason,closed_at,"
+    "line_items,shipping_address,billing_address,customer,fulfillments,payment_gateway_names,"
+    "created_at,updated_at"
+)
 
 from app.modules.ecommerce.providers.shopify.http_client import *
 
@@ -24,7 +30,7 @@ def fetch_orders(connection: EcommerceConnection, limit: int = 50) -> list[dict]
             params = {
                 "status": "any",
                 "limit": min(250, limit - len(orders)),
-                "fields": "id,name,email,phone,tags,note,subtotal_price,total_price,total_discounts,total_tax,currency,financial_status,fulfillment_status,line_items,shipping_address,billing_address,customer,fulfillments,payment_gateway_names,created_at,updated_at",
+                "fields": SHOPIFY_ORDER_FIELDS,
             }
             if page_info:
                 params = {"limit": min(250, limit - len(orders)), "page_info": page_info}
@@ -49,11 +55,7 @@ def fetch_orders_for_sales(connection: EcommerceConnection, limit: int = 500) ->
     if connection.platform == "shopify":
         orders = []
         page_info = None
-        fields = (
-            "id,name,email,phone,tags,note,subtotal_price,total_price,total_discounts,total_tax,"
-            "currency,financial_status,fulfillment_status,line_items,shipping_address,billing_address,"
-            "customer,fulfillments,payment_gateway_names,created_at,updated_at"
-        )
+        fields = SHOPIFY_ORDER_FIELDS
         while len(orders) < limit:
             params = {
                 "status": "any",
@@ -84,11 +86,7 @@ def fetch_order_by_number(connection: EcommerceConnection, order_number: str) ->
         return None
 
     if connection.platform == "shopify":
-        fields = (
-            "id,name,email,phone,tags,note,subtotal_price,total_price,total_discounts,total_tax,"
-            "currency,financial_status,fulfillment_status,line_items,shipping_address,billing_address,"
-            "customer,fulfillments,payment_gateway_names,created_at,updated_at"
-        )
+        fields = SHOPIFY_ORDER_FIELDS
         for name in (f"#{clean_order_number}", clean_order_number):
             response = _shopify_request(
                 "GET",
@@ -161,11 +159,7 @@ def fetch_order_by_id(connection: EcommerceConnection, order_id: str) -> dict | 
         return None
 
     if connection.platform == "shopify":
-        fields = (
-            "id,name,email,phone,tags,note,subtotal_price,total_price,total_discounts,total_tax,"
-            "currency,financial_status,fulfillment_status,line_items,shipping_address,billing_address,"
-            "customer,fulfillments,payment_gateway_names,created_at,updated_at"
-        )
+        fields = SHOPIFY_ORDER_FIELDS
         response = _shopify_request(
             "GET",
             connection,
