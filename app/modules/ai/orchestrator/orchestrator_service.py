@@ -1,4 +1,3 @@
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.ai.chat.openai_chat_service import generate_ai_reply
@@ -10,7 +9,6 @@ from app.modules.ai.orchestrator.tool_executor import execute_tool
 from app.modules.ai.orchestrator.tool_registry import normalize_tool_name
 from app.modules.ai.understanding.query_understanding_service import understand_message
 from app.modules.tenants.tenant_service import tenant_config_context
-from app.models.crm import BotSettings
 from app.shared.tenant import DEFAULT_TENANT_ID, normalize_tenant_id
 
 
@@ -199,15 +197,7 @@ def _run_selected_tool(
 
 
 def _out_of_scope_reply(db: Session | None, tenant_id: str) -> str:
-    fallback = "I can help with products, orders, delivery, returns, and support only."
-    if db is None:
-        return fallback
-    try:
-        row = db.execute(select(BotSettings).where(BotSettings.tenant_id == tenant_id)).scalars().first()
-    except Exception:
-        return fallback
-    configured = str(getattr(row, "fallback_message", "") or "").strip()
-    return configured or fallback
+    return "I can help with products, orders, delivery, returns, and support only."
 
 
 def _deterministic_reply(tool_result: ToolCallResult) -> str | None:

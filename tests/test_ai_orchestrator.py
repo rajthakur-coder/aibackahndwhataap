@@ -113,4 +113,4 @@ def test_orchestrator_blocks_out_of_scope_without_llm(monkeypatch):
 
     assert response.selected_tool == "out_of_scope"
     assert response.tool_result.status == "blocked"
-    assert "orders" in response.reply
+    assert response.reply == "I can help with products, orders, delivery, returns, and support only."
