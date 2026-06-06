@@ -1,4 +1,6 @@
+import asyncio
 import inspect
+from contextlib import suppress
 
 from arq import create_pool
 from arq.connections import RedisSettings
@@ -7,12 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.modules.automation.automation_router import automation_router
+from app.modules.automation.automation_service import automation_processor_loop
 from app.modules.analytics import analytics_router
 from app.modules.compliance import compliance_router
 from app.modules.headless import headless_router
 from app.modules.auth.auth_router import auth_router
 from app.modules.crm.crm_router import crm_router
 from app.modules.ecommerce.ecommerce_router import ecommerce_router, shopify_webhooks_router
+from app.modules.ecommerce.sync.sync_service import ecommerce_auto_sync_loop
 from app.modules.integrations.providers.shopify.shopify_router import shopify_integration_router
 from app.modules.integrations.providers.whatsapp_business.whatsapp_business_router import whatsapp_business_router
 from app.modules.integrations.providers.woocommerce.woocommerce_router import woocommerce_integration_router
@@ -56,10 +60,24 @@ async def startup():
         RedisSettings.from_dsn(settings.REDIS_URL),
         default_queue_name=settings.ARQ_QUEUE_NAME,
     )
+    if settings.AUTOMATION_PROCESSOR_ENABLED:
+        app.state.automation_processor_task = asyncio.create_task(
+            automation_processor_loop()
+        )
+    if settings.ECOMMERCE_AUTO_SYNC_CHECKOUTS_ENABLED:
+        app.state.ecommerce_auto_sync_task = asyncio.create_task(
+            ecommerce_auto_sync_loop()
+        )
 
 
 @app.on_event("shutdown")
 async def shutdown():
+    for task_name in ("automation_processor_task", "ecommerce_auto_sync_task"):
+        task = getattr(app.state, task_name, None)
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
     arq_pool = getattr(app.state, "arq_pool", None)
     if arq_pool is not None:
         close = getattr(arq_pool, "aclose", None) or getattr(arq_pool, "close", None)
