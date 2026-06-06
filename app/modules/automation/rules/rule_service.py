@@ -197,7 +197,7 @@ def _body_variable_order_for_trigger(trigger: str, body: str) -> list[str]:
     if count <= 0:
         return []
     defaults = {
-        TRIGGER_CART_ABANDONED: ["customer_name", "cart_url", "total", "currency"],
+        TRIGGER_CART_ABANDONED: ["customer_name", "product_name", "total", "currency"],
         TRIGGER_ORDER_CREATED: ["customer_name", "order_number", "total", "currency"],
         TRIGGER_ORDER_PAID: ["customer_name", "order_number", "total", "currency"],
         TRIGGER_ORDER_SHIPPED: ["customer_name", "order_number"],

@@ -66,6 +66,7 @@ def _abandoned_checkout_payload(checkout: dict) -> dict:
     billing = checkout.get("billing_address") or {}
     first = shipping.get("first_name") or billing.get("first_name") or customer.get("first_name") or ""
     last = shipping.get("last_name") or billing.get("last_name") or customer.get("last_name") or ""
+    items = checkout.get("line_items") or checkout.get("items") or []
     return {
         "external_id": str(checkout.get("id") or checkout.get("token") or ""),
         "phone": checkout.get("phone")
@@ -77,10 +78,23 @@ def _abandoned_checkout_payload(checkout: dict) -> dict:
         "cart_url": checkout.get("abandoned_checkout_url") or checkout.get("cart_url") or checkout.get("web_url") or "",
         "total": str(checkout.get("total_price") or checkout.get("total") or ""),
         "currency": checkout.get("currency") or "",
-        "items": checkout.get("line_items") or checkout.get("items") or [],
+        "items": items,
+        "product_name": _first_item_name(items),
         "checkout_created_at": checkout.get("created_at"),
         "checkout_updated_at": checkout.get("updated_at"),
     }
+
+def _first_item_name(items: list[dict]) -> str:
+    if not isinstance(items, list):
+        return ""
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key in ("presentment_title", "title", "name", "product_title", "sku"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                return value
+    return ""
 
 def _int_value(value) -> int:
     try:

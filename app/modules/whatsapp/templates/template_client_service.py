@@ -1,6 +1,7 @@
 import requests
 
 from app.modules.whatsapp.client.credentials import resolve_whatsapp_client_credentials
+from app.modules.whatsapp.client.phone_utils import normalize_whatsapp_recipient, raise_for_whatsapp_response
 
 
 WHATSAPP_API_VERSION = "v25.0"
@@ -17,6 +18,7 @@ def send_whatsapp_template(
 ) -> dict:
     credentials = resolve_whatsapp_client_credentials(tenant_id=tenant_id)
 
+    phone = normalize_whatsapp_recipient(phone)
     if not phone or not template_name:
         raise ValueError("Phone and template name are required")
 
@@ -65,7 +67,7 @@ def send_whatsapp_template(
         json=payload,
         timeout=REQUEST_TIMEOUT,
     )
-    response.raise_for_status()
+    raise_for_whatsapp_response(response, "WhatsApp template send")
     return response.json()
 
 __all__ = [

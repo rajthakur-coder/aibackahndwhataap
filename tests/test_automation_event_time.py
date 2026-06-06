@@ -52,3 +52,21 @@ def test_automation_send_passes_event_tenant_to_whatsapp_template(monkeypatch):
 
     assert result == {"ok": True}
     assert captured["args"][-1] == "brand-a"
+
+
+def test_cart_abandoned_template_without_button_does_not_send_button_parameter():
+    template = MessageTemplate(
+        name="wa:abandoned_checkout_message:en_US",
+        provider_template_name="abandoned_checkout_message",
+        body="Hi {{1}}, Looks like you left our bestseller {{2}} ...",
+        body_variable_order='["customer_name", "cart_url"]',
+    )
+    context = {
+        "trigger": "cart_abandoned",
+        "customer_name": "Riya",
+        "cart_url": "https://shopify.test/checkouts/abc",
+        "items": [{"presentment_title": "Phone Case"}],
+    }
+
+    assert sync_service._template_body_parameters(template, context) == ["Riya", "Phone Case"]
+    assert sync_service._template_button_parameters(template, context) == []

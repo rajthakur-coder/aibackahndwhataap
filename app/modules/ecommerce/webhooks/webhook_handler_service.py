@@ -219,6 +219,7 @@ def handle_abandoned_cart_webhook(db: Session, connection_id: int, body: dict) -
         ]
         if value
     ).strip()
+    items = checkout.get("line_items") or checkout.get("items") or []
     payload = {
         "tenant_id": connection.tenant_id,
         "external_id": str(checkout.get("id") or checkout.get("token") or ""),
@@ -228,7 +229,8 @@ def handle_abandoned_cart_webhook(db: Session, connection_id: int, body: dict) -
         "cart_url": checkout.get("abandoned_checkout_url") or checkout.get("cart_url") or checkout.get("web_url") or "",
         "total": str(checkout.get("total_price") or checkout.get("total") or ""),
         "currency": checkout.get("currency") or "",
-        "items": checkout.get("line_items") or checkout.get("items") or [],
+        "items": items,
+        "product_name": _first_item_name(items),
         "checkout_created_at": checkout.get("created_at"),
         "checkout_updated_at": checkout.get("updated_at"),
     }
@@ -238,6 +240,19 @@ def handle_abandoned_cart_webhook(db: Session, connection_id: int, body: dict) -
     event = create_sync_abandoned_cart_event(db, payload=payload, source="ecommerce_abandoned_cart_webhook")
     result = process_automation_event(db, event)
     return {"status": "queued", "event": serialize_event(event), "automation": result}
+
+
+def _first_item_name(items: list[dict]) -> str:
+    if not isinstance(items, list):
+        return ""
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key in ("presentment_title", "title", "name", "product_title", "sku"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                return value
+    return ""
 
 
 def queue_manual_abandoned_cart(db: Session, data) -> dict:

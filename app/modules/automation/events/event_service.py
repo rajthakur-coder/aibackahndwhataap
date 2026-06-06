@@ -194,18 +194,7 @@ async def _process_event(db: AsyncSession, event: AutomationEvent) -> dict:
     if event.scheduled_for and event.scheduled_for > _utcnow_like(event.scheduled_for):
         return {"status": "skipped", "reason": "not_due"}
 
-    payload = _load_json(event.payload, {})
-    if not isinstance(payload, dict):
-        payload = {}
-    payload = {
-        **payload,
-        "external_id": event.external_id or payload.get("external_id") or "",
-        "phone": event.phone or payload.get("phone") or "",
-        "trigger": event.trigger,
-        "source": event.source,
-    }
-    if not payload.get("cart_token"):
-        payload["cart_token"] = payload.get("external_id") or str(payload.get("cart_url") or "").rstrip("/").rsplit("/", 1)[-1]
+    payload = sync_automation._message_context(event)
 
     if await _abandoned_cart_was_converted(db, event, payload):
         event.status = "processed"

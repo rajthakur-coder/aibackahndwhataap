@@ -6,10 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
 from app.db.session import AsyncSessionLocal, engine
-from app.modules.automation.automation_service import (
-    automation_processor_loop,
-    ensure_default_automation_rules,
-)
+from app.modules.automation.automation_service import automation_processor_loop
 from app.modules.ecommerce.sync.sync_service import ecommerce_auto_sync_loop
 from app.shared.arq_queue import close_arq_pools
 from app.shared.redis import close_redis
@@ -25,9 +22,6 @@ async def initialize_database() -> None:
             await connection.run_sync(initialize_database_schema)
     except SQLAlchemyError as exc:
         print(f"Database schema initialization skipped: {exc}")
-
-    async with AsyncSessionLocal() as db:
-        await db.run_sync(ensure_default_automation_rules)
 
 
 def register_lifecycle_events(app: FastAPI) -> None:

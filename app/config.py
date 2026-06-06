@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     WHATSAPP_WEBHOOK_APP_SECRET: str = ""
     WHATSAPP_REGISTER_PIN: str = ""
     WHATSAPP_DATA_LOCALIZATION_REGION: str = ""
+    WHATSAPP_DEFAULT_COUNTRY_CODE: str = "91"
 
     OPENROUTER_API_KEY: str
     OPENROUTER_MODEL: str

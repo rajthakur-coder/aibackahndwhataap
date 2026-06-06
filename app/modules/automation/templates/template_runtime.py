@@ -158,7 +158,33 @@ def _get_path(data: dict, path: str) -> Any:
             return None
     return current
 
+def _first_item_name(context: dict) -> str:
+    items = context.get("items") or context.get("line_items") or []
+    if isinstance(items, str):
+        items = _load_json(items, [])
+    if not isinstance(items, list):
+        return ""
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key in ("presentment_title", "title", "name", "product_title", "sku"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                return value
+    return ""
+
+def _enrich_message_context(context: dict) -> dict:
+    enriched = dict(context or {})
+    if not str(enriched.get("customer_name") or "").strip():
+        enriched["customer_name"] = "there"
+    if not str(enriched.get("product_name") or "").strip():
+        enriched["product_name"] = _first_item_name(enriched) or "your cart"
+    if not enriched.get("cart_token"):
+        enriched["cart_token"] = enriched.get("external_id") or _last_url_segment(enriched.get("cart_url"))
+    return enriched
+
 def render_template(body: str, context: dict) -> str:
+    context = _enrich_message_context(context)
     def replace(match: re.Match) -> str:
         value = _get_path(context, match.group(1))
         if value is None:
@@ -170,6 +196,7 @@ def render_template(body: str, context: dict) -> str:
     return VARIABLE_RE.sub(replace, body or "").strip()
 
 def _template_body_parameters(template: MessageTemplate, context: dict) -> list[str]:
+    context = _enrich_message_context(context)
     variable_order = _load_json(template.body_variable_order, [])
     if not isinstance(variable_order, list):
         return []
@@ -177,6 +204,12 @@ def _template_body_parameters(template: MessageTemplate, context: dict) -> list[
     for variable in variable_order:
         if not isinstance(variable, str):
             continue
+        if (
+            context.get("trigger") == TRIGGER_CART_ABANDONED
+            and variable == "cart_url"
+            and "bestseller" in str(template.body or "").lower()
+        ):
+            variable = "product_name"
         value = _get_path(context, variable)
         if value is None:
             values.append("")
@@ -187,6 +220,7 @@ def _template_body_parameters(template: MessageTemplate, context: dict) -> list[
     return values
 
 def _template_button_parameters(template: MessageTemplate, context: dict) -> list[str]:
+    context = _enrich_message_context(context)
     template_name = template.provider_template_name or template.name
     button_orders = {
         "shipping_update": ["order_number"],
@@ -194,8 +228,6 @@ def _template_button_parameters(template: MessageTemplate, context: dict) -> lis
     }
     if template_name.endswith("_abandoned_cart_recovery"):
         button_orders[template_name] = ["cart_token"]
-    if context.get("trigger") == TRIGGER_CART_ABANDONED:
-        button_orders.setdefault(template_name, ["cart_token"])
     values = []
     for variable in button_orders.get(template_name, []):
         value = _get_path(context, variable)
@@ -222,6 +254,8 @@ __all__ = [
     "_db_naive",
     "_load_json",
     "_get_path",
+    "_first_item_name",
+    "_enrich_message_context",
     "render_template",
     "_template_body_parameters",
     "_template_button_parameters",

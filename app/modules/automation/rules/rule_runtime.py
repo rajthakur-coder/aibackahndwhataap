@@ -178,9 +178,7 @@ def _message_context(event: AutomationEvent) -> dict:
         "trigger": event.trigger,
         "source": event.source,
     }
-    if not context.get("cart_token"):
-        context["cart_token"] = context.get("external_id") or _last_url_segment(context.get("cart_url"))
-    return context
+    return _enrich_message_context(context)
 
 __all__ = [
     "_conditions_match",
