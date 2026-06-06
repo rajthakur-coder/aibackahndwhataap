@@ -1,3 +1,4 @@
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.ai.chat.openai_chat_service import generate_ai_reply
@@ -9,6 +10,7 @@ from app.modules.ai.orchestrator.tool_executor import execute_tool
 from app.modules.ai.orchestrator.tool_registry import normalize_tool_name
 from app.modules.ai.understanding.query_understanding_service import understand_message
 from app.modules.tenants.tenant_service import tenant_config_context
+from app.models.crm import BotSettings
 from app.shared.tenant import DEFAULT_TENANT_ID, normalize_tenant_id
 
 
@@ -22,6 +24,17 @@ def orchestrate_message(
 ) -> OrchestratorResponse:
     tenant_id = normalize_tenant_id(tenant_id)
     understanding = understanding or understand_message(message)
+    if understanding.intent == "out_of_scope":
+        reply = _out_of_scope_reply(db, tenant_id)
+        tool_result = ToolCallResult("out_of_scope", "blocked", reply, {"reason": "outside_business_scope"})
+        return OrchestratorResponse(
+            reply=reply,
+            intent=understanding.intent,
+            selected_tool="out_of_scope",
+            confidence=understanding.confidence,
+            tool_result=tool_result,
+        )
+
     selected_tool = _select_tool(
         understanding.tool,
         understanding.intent,
@@ -106,6 +119,8 @@ def _structured_tool_choice(
 
 
 def _select_tool(tool_name: str, intent: str, confidence: float, message: str = "") -> str:
+    if intent == "out_of_scope" or tool_name == "out_of_scope":
+        return "out_of_scope"
     if confidence < 0.35:
         return "create_support_ticket"
     commerce_tool = _commerce_action_tool(message)
@@ -163,6 +178,9 @@ def _run_selected_tool(
     entities: dict,
     tenant_id: str,
 ) -> ToolCallResult:
+    if selected_tool == "out_of_scope":
+        message = _out_of_scope_reply(db, tenant_id)
+        return ToolCallResult("out_of_scope", "blocked", message, {"reason": "outside_business_scope"})
     if selected_tool == "general_reply":
         return ToolCallResult(
             "general_reply",
@@ -178,6 +196,18 @@ def _run_selected_tool(
         entities=entities,
         tenant_id=tenant_id,
     )
+
+
+def _out_of_scope_reply(db: Session | None, tenant_id: str) -> str:
+    fallback = "I can help with products, orders, delivery, returns, and support only."
+    if db is None:
+        return fallback
+    try:
+        row = db.execute(select(BotSettings).where(BotSettings.tenant_id == tenant_id)).scalars().first()
+    except Exception:
+        return fallback
+    configured = str(getattr(row, "fallback_message", "") or "").strip()
+    return configured or fallback
 
 
 def _deterministic_reply(tool_result: ToolCallResult) -> str | None:

@@ -18,6 +18,7 @@ FAST_RULE_INTENTS = {
     "price_question",
     "policy_question",
     "faq_question",
+    "out_of_scope",
 }
 
 TOOL_BY_INTENT = {
@@ -33,6 +34,43 @@ TOOL_BY_INTENT = {
     "faq_question": "get_policy_or_faq",
     "service_request": "get_services",
     "general": "search_knowledge",
+    "out_of_scope": "out_of_scope",
+}
+
+OUT_OF_SCOPE_CODING_TERMS = {
+    "api",
+    "app",
+    "code",
+    "coding",
+    "css",
+    "html",
+    "java",
+    "javascript",
+    "js",
+    "next",
+    "nextjs",
+    "node",
+    "nodejs",
+    "program",
+    "programming",
+    "python",
+    "react",
+    "script",
+    "typescript",
+}
+
+OUT_OF_SCOPE_LEARNING_TERMS = {
+    "build",
+    "create",
+    "define",
+    "explain",
+    "learn",
+    "make",
+    "meaning",
+    "setup",
+    "teach",
+    "tutorial",
+    "what",
 }
 
 COMMON_FIXES = {
@@ -124,6 +162,17 @@ def _llm_understanding(message: str) -> QueryUnderstanding | None:
 
 def _rule_understanding(message: str) -> QueryUnderstanding:
     normalized = _normalize_text(message)
+    if _looks_out_of_scope(normalized):
+        return QueryUnderstanding(
+            original_message=message,
+            normalized_query=normalized,
+            intent="out_of_scope",
+            entities={},
+            confidence=0.95,
+            tool="out_of_scope",
+            source="rules",
+        )
+
     query_intent = detect_query_intent(normalized)
     intent = query_intent.name
     if _looks_like_greeting_or_menu(normalized):
@@ -179,6 +228,33 @@ def _looks_like_greeting_or_menu(message: str) -> bool:
         intent_words = {"order", "track", "product", "products", "catalog", "price", "image", "status"}
         return not bool(set(tokens[1:]) & intent_words)
     return False
+
+
+def _looks_out_of_scope(message: str) -> bool:
+    tokens = {
+        re.sub(r"[^a-zA-Z0-9]", "", token).lower()
+        for token in re.findall(r"[a-zA-Z0-9.+#-]+", message or "")
+    }
+    tokens.discard("")
+    lowered = (message or "").lower()
+
+    if not tokens & OUT_OF_SCOPE_CODING_TERMS:
+        return False
+
+    if tokens & OUT_OF_SCOPE_LEARNING_TERMS:
+        return True
+
+    coding_phrases = (
+        "what is",
+        "how to",
+        "how do i",
+        "how can i",
+        "new next",
+        "next js",
+        "next.js",
+        "create a new",
+    )
+    return any(phrase in lowered for phrase in coding_phrases)
 
 
 def _merge_rule_entities(message: str, entities: dict) -> dict:
