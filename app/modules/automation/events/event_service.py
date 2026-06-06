@@ -126,7 +126,7 @@ async def _create_event(
         phone=phone or payload.get("phone"),
         payload=json.dumps(payload, ensure_ascii=True),
         status="pending",
-        scheduled_for=datetime.utcnow() + timedelta(seconds=max(0, delay_seconds)),
+        scheduled_for=_utcnow_naive() + timedelta(seconds=max(0, delay_seconds)),
     )
     db.add(event)
     await db.commit()
@@ -155,12 +155,13 @@ async def process_event(db: AsyncSession, event_id: int) -> dict:
     return await _process_event(db, event)
 
 async def process_due_events(db: AsyncSession, limit: int = 50) -> dict:
+    now = _utcnow_naive()
     result = await db.execute(
         select(AutomationEvent)
         .where(
             AutomationEvent.tenant_id == normalize_tenant_id(current_tenant_id() or DEFAULT_TENANT_ID),
             AutomationEvent.status == "pending",
-            AutomationEvent.scheduled_for <= datetime.utcnow(),
+            AutomationEvent.scheduled_for <= now,
         )
         .order_by(AutomationEvent.scheduled_for.asc())
         .limit(max(1, min(limit, 200)))
@@ -190,7 +191,7 @@ async def list_automation_executions(
 async def _process_event(db: AsyncSession, event: AutomationEvent) -> dict:
     if event.status == "processed":
         return {"status": "skipped", "reason": "already_processed"}
-    if event.scheduled_for and event.scheduled_for > datetime.utcnow():
+    if event.scheduled_for and event.scheduled_for > _utcnow_like(event.scheduled_for):
         return {"status": "skipped", "reason": "not_due"}
 
     payload = _load_json(event.payload, {})
@@ -208,7 +209,7 @@ async def _process_event(db: AsyncSession, event: AutomationEvent) -> dict:
 
     if await _abandoned_cart_was_converted(db, event, payload):
         event.status = "processed"
-        event.processed_at = datetime.utcnow()
+        event.processed_at = _utcnow_naive()
         event.error = "Skipped abandoned cart reminder because this customer placed an order."
         await db.commit()
         return {
@@ -255,8 +256,8 @@ async def _process_event(db: AsyncSession, event: AutomationEvent) -> dict:
             continue
 
         due_at = event.created_at + timedelta(seconds=max(0, rule.delay_seconds or 0))
-        if due_at > datetime.utcnow():
-            event.scheduled_for = due_at
+        if due_at > _utcnow_like(due_at):
+            event.scheduled_for = _db_naive(due_at)
             pending_delayed += 1
             continue
 
@@ -285,7 +286,7 @@ async def _process_event(db: AsyncSession, event: AutomationEvent) -> dict:
             response = await _send_message(template, execution.phone, message, payload)
             execution.status = "sent"
             execution.provider_response = json.dumps(response, ensure_ascii=True)
-            execution.sent_at = datetime.utcnow()
+            execution.sent_at = _utcnow_naive()
             db.add(
                 Message(
                     tenant_id=normalize_tenant_id(current_tenant_id() or DEFAULT_TENANT_ID),
@@ -317,7 +318,7 @@ async def _process_event(db: AsyncSession, event: AutomationEvent) -> dict:
         event.processed_at = None
     else:
         event.status = "failed" if failed and not sent else "processed"
-        event.processed_at = datetime.utcnow()
+    event.processed_at = _utcnow_naive()
     event.error = json.dumps(errors[:5], ensure_ascii=True) if errors else None
     await db.commit()
     return {
@@ -415,6 +416,23 @@ def _parse_datetime(value: Any) -> datetime | None:
 def _normalize_datetime(value: datetime | None) -> datetime | None:
     if not isinstance(value, datetime):
         return None
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _utcnow_like(value: datetime | None = None) -> datetime:
+    now = datetime.now(timezone.utc)
+    if isinstance(value, datetime) and value.tzinfo is not None:
+        return now
+    return now.replace(tzinfo=None)
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _db_naive(value: datetime) -> datetime:
     if value.tzinfo is not None:
         return value.astimezone(timezone.utc).replace(tzinfo=None)
     return value
