@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
@@ -210,10 +209,7 @@ def _ensure_message_template(db: Session, data: dict) -> tuple[MessageTemplate, 
     row = db.execute(
         select(MessageTemplate).where(
             MessageTemplate.tenant_id == tenant_id,
-            or_(
-                MessageTemplate.name == provider_name,
-                MessageTemplate.provider_template_name == provider_name,
-            ),
+            MessageTemplate.name == provider_name,
         )
     ).scalars().first()
     created = False
@@ -221,7 +217,7 @@ def _ensure_message_template(db: Session, data: dict) -> tuple[MessageTemplate, 
     if not row:
         row = MessageTemplate(
             tenant_id=tenant_id,
-            name=_tenant_safe_template_name(db, tenant_id, provider_name),
+            name=provider_name,
             body=data["message_body"],
         )
         db.add(row)
@@ -242,17 +238,7 @@ def _ensure_message_template(db: Session, data: dict) -> tuple[MessageTemplate, 
     db.flush()
     return row, created, updated and not created
 
-
-def _tenant_safe_template_name(db: Session, tenant_id: str, provider_name: str) -> str:
-    existing = db.execute(
-        select(MessageTemplate).where(MessageTemplate.name == provider_name)
-    ).scalars().first()
-    if not existing or existing.tenant_id == tenant_id:
-        return provider_name
-    return f"{tenant_id}:{provider_name}"[:255]
-
 __all__ = [
     "ensure_default_automation_rules",
     "_ensure_message_template",
-    "_tenant_safe_template_name",
 ]

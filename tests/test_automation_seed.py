@@ -12,33 +12,41 @@ def _session():
     return sessionmaker(bind=engine, future=True)()
 
 
-def test_default_template_seed_uses_tenant_safe_name_when_global_name_exists():
+def test_default_template_seed_is_tenant_scoped_and_idempotent():
     db = _session()
-    db.add(
-        MessageTemplate(
-            tenant_id="brand-a",
-            name="order_confirmation",
-            body="Existing",
-            provider_template_name="order_confirmation",
-        )
-    )
-    db.commit()
+    payload = {
+        "template_name": "order_confirmation",
+        "message_body": "Hi {{customer_name}}",
+        "body_variable_order": ["customer_name"],
+    }
 
-    token = set_current_tenant_id("brand-b")
+    token = set_current_tenant_id("brand-a")
     try:
-        row, created, updated = _ensure_message_template(
-            db,
-            {
-                "template_name": "order_confirmation",
-                "message_body": "Hi {{customer_name}}",
-                "body_variable_order": ["customer_name"],
-            },
-        )
+        brand_a, created_a, updated_a = _ensure_message_template(db, payload)
     finally:
         reset_current_tenant_id(token)
 
-    assert created is True
-    assert updated is False
-    assert row.tenant_id == "brand-b"
-    assert row.name == "brand-b:order_confirmation"
-    assert row.provider_template_name == "order_confirmation"
+    token = set_current_tenant_id("brand-b")
+    try:
+        brand_b, created_b, updated_b = _ensure_message_template(db, payload)
+    finally:
+        reset_current_tenant_id(token)
+
+    token = set_current_tenant_id("brand-b")
+    try:
+        brand_b_again, created_again, updated_again = _ensure_message_template(db, payload)
+    finally:
+        reset_current_tenant_id(token)
+
+    assert created_a is True
+    assert updated_a is False
+    assert brand_a.tenant_id == "brand-a"
+    assert brand_a.name == "order_confirmation"
+    assert created_b is True
+    assert updated_b is False
+    assert brand_b.tenant_id == "brand-b"
+    assert brand_b.name == "order_confirmation"
+    assert brand_b.provider_template_name == "order_confirmation"
+    assert brand_b_again.id == brand_b.id
+    assert created_again is False
+    assert updated_again is False
