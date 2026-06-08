@@ -138,14 +138,6 @@ async def _handle_active_handoff(
         return False
 
     _append_handoff_summary(db, active_handoff, "incoming", text)
-    handoff_text = _localized(
-        _reply_language(text, bot_settings),
-        f"Your request is already with our support team. Ticket #{active_handoff.id} is open, and they will reply shortly.",
-        f"Aapki request support team ke paas hai. Ticket #{active_handoff.id} open hai, team jaldi reply karegi.",
-    )
-    with timing.stage("whatsapp_send"):
-        await run_in_threadpool(send_whatsapp_message, phone, handoff_text)
-    save_message(db, phone, handoff_text, "outgoing")
     db.add(
         AgentAction(
             phone=phone,
@@ -155,7 +147,7 @@ async def _handle_active_handoff(
         )
     )
     db.commit()
-    return True
+    return False
 
 async def _handle_offline_handoff(
     db: Session,
