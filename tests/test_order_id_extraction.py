@@ -12,6 +12,7 @@ from app.modules.whatsapp.webhooks.flows.commerce_flows import (
     _is_manual_track_order_id,
     _is_return_request,
     _is_track_request,
+    _is_welcome_request,
 )
 
 
@@ -29,8 +30,58 @@ def test_bare_order_number_routes_to_order_status():
     assert result.entities["order_id"] == "1234"
 
 
+def test_casual_single_word_is_not_bare_order_id():
+    result = understand_message("yoo")
+
+    assert result.intent != "order_status"
+    assert result.tool != "get_order_status"
+    assert "order_id" not in result.entities
+    assert _extract_order_id("yoo") is None
+
+
+def test_random_alphabet_words_do_not_trigger_order_lookup():
+    casual_messages = [
+        "yo",
+        "yoo",
+        "bro",
+        "test",
+        "random",
+        "checking",
+        "hmmm",
+        "okay",
+        "thanks",
+        "nice",
+    ]
+
+    for message in casual_messages:
+        result = understand_message(message)
+
+        assert result.intent != "order_status", message
+        assert result.tool != "get_order_status", message
+        assert "order_id" not in result.entities, message
+        assert _extract_order_id(message) is None, message
+
+
+def test_low_information_messages_use_rules_without_llm(monkeypatch):
+    def fail_llm(*args, **kwargs):
+        raise AssertionError("Low-information messages should not call the LLM router")
+
+    monkeypatch.setattr(
+        "app.modules.ai.understanding.query_understanding_service.chat_completion",
+        fail_llm,
+    )
+
+    for message in ("yoo", "test", "okay", "thanks"):
+        result = understand_message(message)
+
+        assert result.intent == "menu_request", message
+        assert result.tool == "general_reply", message
+        assert _is_welcome_request(message) is True
+
+
 def test_order_id_extractor_accepts_bare_values():
     assert _extract_order_id("1234") == "1234"
+    assert _extract_order_id("ORD1234") == "ORD1234"
     assert _extract_order_id("#HS-1") == "HS-1"
     assert _extract_order_id("track order #1234") == "1234"
 

@@ -14,9 +14,10 @@ _BACKGROUND_LOG_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix=
 
 
 class TypingIndicatorHandle:
-    def __init__(self, message_id: str, phone: str | None, interval_seconds: float = 12.0):
+    def __init__(self, message_id: str, phone: str | None, tenant_id: str | None = None, interval_seconds: float = 12.0):
         self.message_id = message_id
         self.phone = phone
+        self.tenant_id = tenant_id
         self.interval_seconds = interval_seconds
         self._first_attempt = threading.Event()
         self._stop = threading.Event()
@@ -32,7 +33,7 @@ class TypingIndicatorHandle:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            success = _mark_read_with_typing_worker(self.message_id, self.phone)
+            success = _mark_read_with_typing_worker(self.message_id, self.phone, self.tenant_id)
             self._first_attempt.set()
             if not success:
                 return
@@ -145,17 +146,18 @@ def _log_query_understanding_worker(phone: str, payload: dict) -> None:
 def start_mark_read_with_typing(event: WebhookEvent, wait_seconds: float = 0.8) -> TypingIndicatorHandle | None:
     if not event.external_id:
         return None
-    return TypingIndicatorHandle(event.external_id, event.phone).start(wait_seconds)
+    return TypingIndicatorHandle(event.external_id, event.phone, event.tenant_id).start(wait_seconds)
 
 
-def _mark_read_with_typing_worker(message_id: str, phone: str | None) -> bool:
+def _mark_read_with_typing_worker(message_id: str, phone: str | None, tenant_id: str | None = None) -> bool:
     try:
-        mark_whatsapp_message_read_with_typing(message_id)
+        mark_whatsapp_message_read_with_typing(message_id, tenant_id=tenant_id)
         return True
     except Exception as exc:
         def sync_op(db):
             db.add(
                 AgentAction(
+                    tenant_id=tenant_id,
                     phone=phone,
                     action_type="typing_indicator_failed",
                     status="failed",

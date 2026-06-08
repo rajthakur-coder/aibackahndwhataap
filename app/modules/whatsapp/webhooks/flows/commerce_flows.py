@@ -51,6 +51,21 @@ GIFTING_ROWS = [
     {"id": "gift:hospitality", "title": "Hospitality", "description": "Hotel or restaurant"},
     {"id": "gift:personal", "title": "Large order", "description": "Personal large order"},
 ]
+LOW_INFORMATION_WELCOME_TERMS = {
+    "bro",
+    "checking",
+    "hmm",
+    "hmmm",
+    "nice",
+    "ok",
+    "okay",
+    "test",
+    "testing",
+    "thank",
+    "thanks",
+    "yo",
+    "yoo",
+}
 RETURN_ORDER_RE = re.compile(
     r"\b(?:return|exchange)\b.*?(?:order|ord|invoice|booking)\s*(?:id|number|no)?\s*(?:#|:|-)?\s*([A-Za-z0-9][A-Za-z0-9-]{2,})\b"
     r"|\b(?:return|exchange)\b.*?#([A-Za-z0-9][A-Za-z0-9-]{2,})\b"
@@ -750,7 +765,7 @@ def _is_gifting_quantity(text: str) -> bool:
 
 
 def _is_welcome_request(text: str) -> bool:
-    return text in {"hi", "hii", "hello", "hey", "start", "/start", "menu", "help"}
+    return text in {"hi", "hii", "hello", "hey", "start", "/start", "menu", "help"} | LOW_INFORMATION_WELCOME_TERMS
 
 
 def _is_return_confirmation_yes(text: str) -> bool:

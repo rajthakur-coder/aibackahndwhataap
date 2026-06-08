@@ -627,8 +627,14 @@ def _extract_order_id(message: str) -> str | None:
     match = ORDER_RE.search(message or "")
     if match:
         return next((group.upper() for group in match.groups() if group), None)
-    bare_match = BARE_ORDER_RE.match(message or "")
-    return bare_match.group(1).upper() if bare_match else None
+    value = str(message or "").strip()
+    bare_match = BARE_ORDER_RE.match(value)
+    if not bare_match:
+        return None
+    order_id = bare_match.group(1)
+    if not value.startswith("#") and not any(char.isdigit() for char in order_id):
+        return None
+    return order_id.upper()
 
 
 def _catalog_query(message: str, entities: dict) -> str:

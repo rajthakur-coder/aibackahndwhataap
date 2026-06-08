@@ -73,6 +73,22 @@ OUT_OF_SCOPE_LEARNING_TERMS = {
     "what",
 }
 
+LOW_INFORMATION_TERMS = {
+    "bro",
+    "checking",
+    "hmm",
+    "hmmm",
+    "nice",
+    "ok",
+    "okay",
+    "test",
+    "testing",
+    "thank",
+    "thanks",
+    "yo",
+    "yoo",
+}
+
 COMMON_FIXES = {
     "iamge": "image",
     "imgae": "image",
@@ -224,6 +240,8 @@ def _looks_like_greeting_or_menu(message: str) -> bool:
         return False
     if any(token in {"menu", "help", "start"} for token in tokens[:4]):
         return True
+    if len(tokens) <= 3 and set(tokens) <= LOW_INFORMATION_TERMS:
+        return True
     if tokens[0] in {"hi", "hii", "hello", "hey", "namaste"} and len(tokens) <= 4:
         intent_words = {"order", "track", "product", "products", "catalog", "price", "image", "status"}
         return not bool(set(tokens[1:]) & intent_words)
@@ -273,8 +291,14 @@ def _merge_rule_entities(message: str, entities: dict) -> dict:
 
 
 def _bare_order_id(message: str) -> str | None:
-    match = BARE_ORDER_RE.match(message or "")
-    return match.group(1).upper() if match else None
+    value = str(message or "").strip()
+    match = BARE_ORDER_RE.match(value)
+    if not match:
+        return None
+    order_id = match.group(1)
+    if not value.startswith("#") and not any(char.isdigit() for char in order_id):
+        return None
+    return order_id.upper()
 
 
 def _clamp_confidence(value, default: float) -> float:
