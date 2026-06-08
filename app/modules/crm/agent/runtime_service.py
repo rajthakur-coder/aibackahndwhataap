@@ -207,8 +207,7 @@ def process_agent_message(db: Session, phone: str, message: str, tenant_id: str 
             payload={"ticket_id": ticket.id, "reason": ticket.reason, "matched_keyword": matched_handoff_keyword},
         )
         reply_override = (
-            f"I am connecting you with our support team. Your ticket ID is #{ticket.id}. "
-            "I will pause automated replies while this ticket is open."
+           f"Thank you for reaching out. I have forwarded your request to our support team. Ticket ID: #{ticket.id}. A support representative will assist you shortly."
         )
         action_results.append({"handoff_ticket_id": ticket.id})
 
