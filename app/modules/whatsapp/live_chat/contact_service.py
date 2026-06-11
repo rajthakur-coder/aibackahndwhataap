@@ -42,9 +42,11 @@ def list_chat_contacts(
     status: str | None = None,
     tags: str | None = None,
     tag_ids: str | None = None,
+    sync_missing_contacts: bool = False,
 ) -> dict:
     tenant_id = _live_chat_tenant_id()
-    _ensure_message_contacts(db, tenant_id=tenant_id)
+    if sync_missing_contacts:
+        _ensure_message_contacts(db, tenant_id=tenant_id)
     page_limit = max(1, int(limit))
     page_offset = max(0, int(offset))
     start = page_offset * page_limit
@@ -78,18 +80,17 @@ def list_chat_contacts(
         )
         filtered_conditions.append(tag_filter)
 
-    records_total = db.execute(
-        select(func.count(Contact.id)).where(*base_conditions)
-    ).scalar_one()
+    status_counts = dict(
+        db.execute(
+            select(Contact.status, func.count(Contact.id))
+            .where(*base_conditions)
+            .group_by(Contact.status)
+        ).all()
+    )
+    records_total = sum(status_counts.values())
     records_filtered = db.execute(
         select(func.count(Contact.id)).where(*filtered_conditions)
     ).scalar_one()
-    total_active, total_blocked, total_inactive = (
-        db.execute(
-            select(func.count(Contact.id)).where(*base_conditions, Contact.status == item)
-        ).scalar_one()
-        for item in ("Active", "Blocked", "Inactive")
-    )
 
     contacts = db.execute(
         select(Contact)
@@ -112,9 +113,9 @@ def list_chat_contacts(
         "data": page,
         "recordsTotal": records_total,
         "recordsFiltered": records_filtered,
-        "total_active": total_active,
-        "total_blocked": total_blocked,
-        "total_inactive": total_inactive,
+        "total_active": status_counts.get("Active", 0),
+        "total_blocked": status_counts.get("Blocked", 0),
+        "total_inactive": status_counts.get("Inactive", 0),
     }
 
 def _serialize_contact_summary(contact: Contact, *, sr_no: int) -> dict:

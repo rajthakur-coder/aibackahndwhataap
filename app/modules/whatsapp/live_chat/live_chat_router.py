@@ -96,6 +96,7 @@ async def get_live_chat_contacts(
     status: str | None = None,
     tags: str | None = None,
     tag_ids: str | None = None,
+    sync_missing_contacts: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     return await db.run_sync(
@@ -107,6 +108,7 @@ async def get_live_chat_contacts(
             status=status,
             tags=tags,
             tag_ids=tag_ids,
+            sync_missing_contacts=sync_missing_contacts,
         )
     )
 
