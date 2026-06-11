@@ -25,6 +25,7 @@ def get_chat_messages(db: Session, contact: str) -> dict:
         if row.direction == "incoming" and row.status != "read":
             row.status = "read"
     db.commit()
+    clear_contact_unread(db, phone=contact, tenant_id=tenant_id)
 
     return {
         "success": True,
@@ -85,6 +86,15 @@ def send_live_chat_text(
     db.add(row)
     db.commit()
     db.refresh(row)
+    update_contact_from_message(
+        db,
+        phone=to_no,
+        message=message_body,
+        direction="outgoing",
+        message_type="text",
+        created_at=row.created_at,
+        tenant_id=tenant_id,
+    )
 
     return {
         "success": True,
@@ -104,6 +114,8 @@ def mark_chat_read(db: Session, message_id: str | None = None, contact: str | No
             continue
         row.status = "read"
     db.commit()
+    if contact:
+        clear_contact_unread(db, phone=contact, tenant_id=tenant_id)
     return {"success": True, "statusCode": 1, "message": "Message status updated"}
 
 def _live_chat_tenant_id() -> str:

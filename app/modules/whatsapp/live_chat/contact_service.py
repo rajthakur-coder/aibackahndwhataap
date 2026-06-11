@@ -1,9 +1,9 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.models.contact import Contact, ContactTag, Tag
@@ -45,41 +45,65 @@ def list_chat_contacts(
 ) -> dict:
     tenant_id = _live_chat_tenant_id()
     _ensure_message_contacts(db, tenant_id=tenant_id)
-    rows = _build_contact_rows(db, tenant_id=tenant_id)
-    records_total = len(rows)
-    total_active = sum(1 for row in rows if row["status"] == "Active")
-    total_blocked = sum(1 for row in rows if row["status"] == "Blocked")
-    total_inactive = sum(1 for row in rows if row["status"] == "Inactive")
-
-    tag_names = {item.strip() for item in (tags or "").split(",") if item.strip()}
-    tag_id_values = {int(item) for item in (tag_ids or "").split(",") if item.strip().isdigit()}
-
-    filtered = []
-    normalized_search = search_value.lower().strip()
-    for row in rows:
-        if status and row["status"] != status:
-            continue
-        if normalized_search:
-            haystack = " ".join(
-                str(row.get(key) or "")
-                for key in ("custom_name", "profile_name", "customer_phone_number", "last_message")
-            ).lower()
-            if normalized_search not in haystack:
-                continue
-        if tag_names or tag_id_values:
-            row_tags = row.get("contact_tags", [])
-            if tag_names and not any(tag["name"] in tag_names for tag in row_tags):
-                continue
-            if tag_id_values and not any(int(tag["id"]) in tag_id_values for tag in row_tags):
-                continue
-        filtered.append(row)
-
-    filtered.sort(key=lambda item: item.get("last_message_time") or item.get("created_at") or "", reverse=True)
     page_limit = max(1, int(limit))
-    start = max(0, int(offset)) * page_limit
-    page = filtered[start : start + page_limit]
-    for index, row in enumerate(page, start=start + 1):
-        row["sr_no"] = index
+    page_offset = max(0, int(offset))
+    start = page_offset * page_limit
+    normalized_search = search_value.lower().strip()
+    tag_names = [item.strip() for item in (tags or "").split(",") if item.strip()]
+    tag_id_values = [int(item) for item in (tag_ids or "").split(",") if item.strip().isdigit()]
+
+    base_conditions = [Contact.tenant_id == tenant_id]
+    filtered_conditions = [Contact.tenant_id == tenant_id]
+    if status:
+        filtered_conditions.append(Contact.status == status)
+    if normalized_search:
+        like = f"%{normalized_search}%"
+        filtered_conditions.append(
+            or_(
+                func.lower(func.coalesce(Contact.custom_name, "")).like(like),
+                func.lower(func.coalesce(Contact.name, "")).like(like),
+                func.lower(func.coalesce(Contact.profile_name, "")).like(like),
+                func.lower(func.coalesce(Contact.phone, "")).like(like),
+                func.lower(func.coalesce(Contact.last_message, "")).like(like),
+            )
+        )
+    if tag_names or tag_id_values:
+        tag_conditions = []
+        if tag_names:
+            tag_conditions.append(Tag.name.in_(tag_names))
+        if tag_id_values:
+            tag_conditions.append(Tag.id.in_(tag_id_values))
+        tag_filter = Contact.contact_tags.any(
+            ContactTag.tag.has(or_(*tag_conditions))
+        )
+        filtered_conditions.append(tag_filter)
+
+    records_total = db.execute(
+        select(func.count(Contact.id)).where(*base_conditions)
+    ).scalar_one()
+    records_filtered = db.execute(
+        select(func.count(Contact.id)).where(*filtered_conditions)
+    ).scalar_one()
+    total_active, total_blocked, total_inactive = (
+        db.execute(
+            select(func.count(Contact.id)).where(*base_conditions, Contact.status == item)
+        ).scalar_one()
+        for item in ("Active", "Blocked", "Inactive")
+    )
+
+    contacts = db.execute(
+        select(Contact)
+        .options(selectinload(Contact.contact_tags).selectinload(ContactTag.tag))
+        .where(*filtered_conditions)
+        .order_by(Contact.last_message_time.desc().nullslast(), Contact.created_at.desc())
+        .offset(start)
+        .limit(page_limit)
+    ).scalars().all()
+
+    page = [
+        _serialize_contact_summary(contact, sr_no=start + index)
+        for index, contact in enumerate(contacts, start=1)
+    ]
 
     return {
         "success": True,
@@ -87,77 +111,113 @@ def list_chat_contacts(
         "message": "contact fetched successfully",
         "data": page,
         "recordsTotal": records_total,
-        "recordsFiltered": len(filtered),
+        "recordsFiltered": records_filtered,
         "total_active": total_active,
         "total_blocked": total_blocked,
         "total_inactive": total_inactive,
     }
 
+def _serialize_contact_summary(contact: Contact, *, sr_no: int) -> dict:
+    contact_tags = [
+        {
+            "id": contact_tag.tag.id,
+            "name": contact_tag.tag.name,
+            "color": contact_tag.tag.color,
+            "created_at": contact_tag.created_at.isoformat() if contact_tag.created_at else None,
+        }
+        for contact_tag in contact.contact_tags
+        if contact_tag.tag and contact_tag.tag.status == "Active"
+    ]
+    return {
+        "sr_no": sr_no,
+        "id": str(contact.id),
+        "phone_number": "",
+        "customer_phone_number": contact.phone,
+        "profile_name": contact.profile_name or contact.phone,
+        "custom_name": contact.custom_name or contact.name,
+        "remark": contact.remark,
+        "last_message": contact.last_message or "",
+        "last_message_type": contact.last_message_type or "text",
+        "last_message_time": contact.last_message_time.isoformat()
+        if contact.last_message_time
+        else None,
+        "last_incoming_msg_time": contact.last_incoming_msg_time.isoformat()
+        if contact.last_incoming_msg_time
+        else None,
+        "unread_count": contact.unread_count or 0,
+        "status": contact.status or "Active",
+        "isWindowOpen": _is_24_hour_window_open(contact.last_incoming_msg_time),
+        "contact_tags": contact_tags,
+        "created_at": contact.created_at.isoformat() if contact.created_at else None,
+        "updated_at": contact.updated_at.isoformat() if contact.updated_at else None,
+    }
+
 def _ensure_message_contacts(db: Session, *, tenant_id: str | None = None) -> None:
     tenant_id = normalize_tenant_id(tenant_id or _live_chat_tenant_id())
-    phones = db.execute(
-        select(Message.phone).where(Message.tenant_id == tenant_id).distinct()
-    ).scalars().all()
-    for phone in phones:
-        if not phone:
-            continue
-        existing = db.execute(
-            select(Contact).where(Contact.tenant_id == tenant_id, Contact.phone == str(phone))
-        ).scalars().first()
-        if not existing:
-            db.add(
-                Contact(
-                    tenant_id=tenant_id,
-                    phone=str(phone),
-                    profile_name=str(phone),
-                    name=None,
-                    custom_name=None,
-                    status="Active",
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow(),
-                )
+    phones = {
+        str(phone)
+        for phone in db.execute(
+            select(Message.phone).where(Message.tenant_id == tenant_id).distinct()
+        ).scalars().all()
+        if phone
+    }
+    if not phones:
+        return
+
+    existing_phones = set(
+        db.execute(
+            select(Contact.phone).where(
+                Contact.tenant_id == tenant_id,
+                Contact.phone.in_(phones),
             )
+        ).scalars().all()
+    )
+    missing_phones = phones - existing_phones
+    if not missing_phones:
+        return
+
+    now = datetime.utcnow()
+    for phone in missing_phones:
+        db.add(
+            Contact(
+                tenant_id=tenant_id,
+                phone=phone,
+                profile_name=phone,
+                name=None,
+                custom_name=None,
+                status="Active",
+                created_at=now,
+                updated_at=now,
+            )
+        )
     db.commit()
 
 def _build_contact_rows(db: Session, *, tenant_id: str | None = None) -> list[dict]:
     tenant_id = normalize_tenant_id(tenant_id or _live_chat_tenant_id())
-    contacts = db.execute(select(Contact).where(Contact.tenant_id == tenant_id)).scalars().all()
+    contacts = db.execute(
+        select(Contact).where(Contact.tenant_id == tenant_id)
+    ).scalars().all()
+    if not contacts:
+        return []
+
+    contact_ids = [contact.id for contact in contacts]
+    phones = [str(contact.phone) for contact in contacts if contact.phone]
+    latest_messages = _latest_messages_by_phone(db, tenant_id=tenant_id, phones=phones)
+    latest_incoming_messages = _latest_messages_by_phone(
+        db,
+        tenant_id=tenant_id,
+        phones=phones,
+        direction="incoming",
+    )
+    unread_counts = _unread_counts_by_phone(db, tenant_id=tenant_id, phones=phones)
+    tags_by_contact = _tags_by_contact_id(db, tenant_id=tenant_id, contact_ids=contact_ids)
+
     rows = []
     for contact in contacts:
-        latest = db.execute(
-            select(Message)
-            .where(Message.tenant_id == tenant_id, Message.phone == contact.phone)
-            .order_by(Message.created_at.desc(), Message.id.desc())
-            .limit(1)
-        ).scalars().first()
-        latest_incoming = db.execute(
-            select(Message)
-            .where(
-                Message.tenant_id == tenant_id,
-                Message.phone == contact.phone,
-                Message.direction == "incoming",
-            )
-            .order_by(Message.created_at.desc(), Message.id.desc())
-            .limit(1)
-        ).scalars().first()
-        unread_count = db.execute(
-            select(func.count(Message.id)).where(
-                Message.phone == contact.phone,
-                Message.tenant_id == tenant_id,
-                Message.direction == "incoming",
-                Message.status != "read",
-            )
-        ).scalar_one()
-        contact_tags = [
-            {
-                "id": contact_tag.tag.id,
-                "name": contact_tag.tag.name,
-                "color": contact_tag.tag.color,
-                "created_at": contact_tag.created_at.isoformat() if contact_tag.created_at else None,
-            }
-            for contact_tag in contact.contact_tags
-            if contact_tag.tag and contact_tag.tag.status == "Active"
-        ]
+        phone = str(contact.phone or "")
+        latest = latest_messages.get(phone)
+        latest_incoming = latest_incoming_messages.get(phone)
+        contact_tags = tags_by_contact.get(contact.id, [])
         rows.append(
             {
                 "id": str(contact.id),
@@ -172,7 +232,7 @@ def _build_contact_rows(db: Session, *, tenant_id: str | None = None) -> list[di
                 "last_incoming_msg_time": latest_incoming.created_at.isoformat()
                 if latest_incoming and latest_incoming.created_at
                 else None,
-                "unread_count": unread_count,
+                "unread_count": unread_counts.get(phone, 0),
                 "status": contact.status or "Active",
                 "isWindowOpen": _is_24_hour_window_open(
                     latest_incoming.created_at if latest_incoming else None
@@ -183,6 +243,163 @@ def _build_contact_rows(db: Session, *, tenant_id: str | None = None) -> list[di
             }
         )
     return rows
+
+def update_contact_from_message(
+    db: Session,
+    *,
+    phone: str,
+    message: str,
+    direction: str,
+    message_type: str = "text",
+    created_at: datetime | None = None,
+    tenant_id: str | None = None,
+) -> Contact:
+    tenant_id = normalize_tenant_id(tenant_id or _live_chat_tenant_id())
+    normalized_phone = _normalize_phone(phone)
+    now = created_at or datetime.utcnow()
+    contact = db.execute(
+        select(Contact).where(
+            Contact.tenant_id == tenant_id,
+            Contact.phone == normalized_phone,
+        )
+    ).scalars().first()
+
+    if not contact:
+        contact = Contact(
+            tenant_id=tenant_id,
+            phone=normalized_phone,
+            profile_name=normalized_phone,
+            status="Active",
+            created_at=now,
+        )
+        db.add(contact)
+
+    contact.last_message = message
+    contact.last_message_type = message_type or "text"
+    contact.last_message_time = now
+    contact.updated_at = datetime.utcnow()
+
+    if direction == "incoming":
+        contact.last_incoming_msg_time = now
+        contact.unread_count = (contact.unread_count or 0) + 1
+    elif contact.unread_count is None:
+        contact.unread_count = 0
+
+    db.commit()
+    db.refresh(contact)
+    return contact
+
+def clear_contact_unread(
+    db: Session,
+    *,
+    phone: str,
+    tenant_id: str | None = None,
+) -> None:
+    tenant_id = normalize_tenant_id(tenant_id or _live_chat_tenant_id())
+    normalized_phone = _normalize_phone(phone)
+    if not normalized_phone:
+        return
+
+    contact = db.execute(
+        select(Contact).where(
+            Contact.tenant_id == tenant_id,
+            Contact.phone == normalized_phone,
+        )
+    ).scalars().first()
+    if not contact:
+        return
+
+    contact.unread_count = 0
+    contact.updated_at = datetime.utcnow()
+    db.commit()
+
+def _latest_messages_by_phone(
+    db: Session,
+    *,
+    tenant_id: str,
+    phones: list[str],
+    direction: str | None = None,
+) -> dict[str, Message]:
+    if not phones:
+        return {}
+
+    conditions = [Message.tenant_id == tenant_id, Message.phone.in_(phones)]
+    if direction:
+        conditions.append(Message.direction == direction)
+
+    ranked_messages = (
+        select(
+            Message.id.label("id"),
+            func.row_number()
+            .over(
+                partition_by=Message.phone,
+                order_by=[Message.created_at.desc(), Message.id.desc()],
+            )
+            .label("rank"),
+        )
+        .where(*conditions)
+        .subquery()
+    )
+
+    rows = db.execute(
+        select(Message)
+        .join(ranked_messages, Message.id == ranked_messages.c.id)
+        .where(ranked_messages.c.rank == 1)
+    ).scalars().all()
+    return {str(row.phone): row for row in rows if row.phone}
+
+def _unread_counts_by_phone(db: Session, *, tenant_id: str, phones: list[str]) -> dict[str, int]:
+    if not phones:
+        return {}
+
+    rows = db.execute(
+        select(Message.phone, func.count(Message.id))
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.phone.in_(phones),
+            Message.direction == "incoming",
+            Message.status != "read",
+        )
+        .group_by(Message.phone)
+    ).all()
+    return {str(phone): int(count or 0) for phone, count in rows if phone}
+
+def _tags_by_contact_id(
+    db: Session,
+    *,
+    tenant_id: str,
+    contact_ids: list[int],
+) -> dict[int, list[dict]]:
+    if not contact_ids:
+        return {}
+
+    rows = db.execute(
+        select(
+            ContactTag.contact_id,
+            Tag.id,
+            Tag.name,
+            Tag.color,
+            ContactTag.created_at,
+        )
+        .join(Tag, ContactTag.tag_id == Tag.id)
+        .where(
+            ContactTag.tenant_id == tenant_id,
+            ContactTag.contact_id.in_(contact_ids),
+            Tag.status == "Active",
+        )
+    ).all()
+
+    tags_by_contact: dict[int, list[dict]] = {}
+    for contact_id, tag_id, name, color, created_at in rows:
+        tags_by_contact.setdefault(int(contact_id), []).append(
+            {
+                "id": tag_id,
+                "name": name,
+                "color": color,
+                "created_at": created_at.isoformat() if created_at else None,
+            }
+        )
+    return tags_by_contact
 
 def upsert_manual_contact(
     db: Session,
@@ -259,7 +476,12 @@ def _live_chat_tenant_id() -> str:
 def _is_24_hour_window_open(last_incoming_time: datetime | None) -> bool:
     if not last_incoming_time:
         return False
-    return datetime.utcnow() - last_incoming_time <= timedelta(hours=24)
+    now = (
+        datetime.now(timezone.utc)
+        if last_incoming_time.tzinfo
+        else datetime.utcnow()
+    )
+    return now - last_incoming_time <= timedelta(hours=24)
 
 __all__ = [
     "serialize_message",
@@ -269,6 +491,8 @@ __all__ = [
     "upsert_manual_contact",
     "update_contact_status",
     "delete_contact",
+    "update_contact_from_message",
+    "clear_contact_unread",
     "_normalize_phone",
     "_live_chat_tenant_id",
     "_is_24_hour_window_open",

@@ -103,6 +103,17 @@ def send_template_message(
     db.add(message)
     db.commit()
     db.refresh(message)
+    from app.modules.whatsapp.live_chat.contact_service import update_contact_from_message
+
+    update_contact_from_message(
+        db,
+        phone=to_no,
+        message=message.message,
+        direction="outgoing",
+        message_type="template",
+        created_at=message.created_at,
+        tenant_id=tenant_id,
+    )
     data = {
         "id": message.whatsapp_message_id or message.id,
         "msg_id": message.whatsapp_message_id or message.id,

@@ -34,4 +34,15 @@ def save_message(
     db.add(row)
     db.commit()
     db.refresh(row)
+    from app.modules.whatsapp.live_chat.contact_service import update_contact_from_message
+
+    update_contact_from_message(
+        db,
+        phone=phone,
+        message=message,
+        direction=direction,
+        message_type=message_type,
+        created_at=row.created_at,
+        tenant_id=row.tenant_id,
+    )
     return row
