@@ -16,12 +16,14 @@ from app.models.crm import (
     Lead,
     OrderStatus,
 )
+from app.models.whatsapp import Message
 from app.modules.crm.crm_schema import ActionRequest, BotSettingsRequest, HandoffResolveRequest, OrderRequest
 from app.modules.crm.agent.agent_service import clear_bot_settings_cache
+from app.modules.whatsapp.live_chat.contact_service import serialize_message
 
 router = APIRouter()
 
-def serialize_handoff(ticket: HandoffTicket) -> dict:
+def serialize_handoff(ticket: HandoffTicket, messages: list[Message] | None = None) -> dict:
     return {
         "id": ticket.id,
         "tenant_id": ticket.tenant_id,
@@ -29,6 +31,7 @@ def serialize_handoff(ticket: HandoffTicket) -> dict:
         "reason": ticket.reason,
         "status": ticket.status,
         "summary": ticket.summary,
+        "messages": [serialize_message(message) for message in messages or []],
         "created_at": str(ticket.created_at),
         "updated_at": str(ticket.updated_at),
     }
@@ -44,7 +47,16 @@ async def list_handoffs(
         statement = statement.where(HandoffTicket.status == status.strip())
     result = await db.execute(statement.order_by(HandoffTicket.created_at.desc()))
     rows = result.scalars().all()
-    return [serialize_handoff(row) for row in rows]
+    serialized = []
+    for row in rows:
+        messages_result = await db.execute(
+            select(Message)
+            .where(Message.tenant_id == tenant_id, Message.phone == row.phone)
+            .order_by(Message.created_at.asc(), Message.id.asc())
+            .limit(80)
+        )
+        serialized.append(serialize_handoff(row, messages_result.scalars().all()))
+    return serialized
 
 @router.post("/handoffs/{ticket_id}/close")
 async def close_handoff(
