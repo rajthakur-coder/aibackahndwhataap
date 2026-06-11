@@ -18,6 +18,8 @@ class ScraperCompetitorOut(BaseModel):
 class ScraperResultOut(BaseModel):
     company_name: Optional[str] = None
     industry: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
     about_company: Optional[str] = None
     website_link: Optional[str] = None
     logo: Optional[str] = None

@@ -12,6 +12,8 @@ class KnowledgeBase(TimestampMixin, Base):
     website_link = Column(Text, nullable=True)
     company_name = Column(String, nullable=True)
     industry = Column(String, nullable=True)
+    contact_email = Column(String, nullable=True)
+    contact_phone = Column(String, nullable=True)
     about_company = Column(Text, nullable=True)
     target_demographics = Column(Text, nullable=True)
     logo = Column(Text, nullable=True)

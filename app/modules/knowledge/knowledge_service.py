@@ -10,6 +10,22 @@ from app.modules.knowledge.knowledge_schema import KnowledgeBaseRequest
 from app.shared.tenant import DEFAULT_TENANT_ID, normalize_tenant_id
 
 
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+PHONE_RE = re.compile(r"(?:\+?91[\s-]?)?[6-9]\d{9}\b")
+CONTACT_QUERY_TERMS = (
+    "contact",
+    "email",
+    "e-mail",
+    "mail",
+    "mobile",
+    "phone",
+    "number",
+    "call",
+    "whatsapp",
+    "support",
+)
+
+
 def _json_loads(value: str | None, fallback):
     if not value:
         return fallback
@@ -43,6 +59,8 @@ def serialize_knowledge_base(row: KnowledgeBase) -> dict:
         "website_link": row.website_link,
         "company_name": row.company_name,
         "industry": row.industry,
+        "contact_email": row.contact_email,
+        "contact_phone": row.contact_phone,
         "about_company": row.about_company,
         "target_demographics": row.target_demographics,
         "logo": row.logo,
@@ -59,6 +77,17 @@ def save_knowledge_base(db: Session, data: KnowledgeBaseRequest, tenant_id: str 
     row.website_link = (data.website_link or "").strip() or None
     row.company_name = (data.company_name or "").strip() or None
     row.industry = (data.industry or "").strip() or None
+    row.contact_email = _clean_email(data.contact_email) or _first_email(
+        data.about_company,
+        data.policies,
+        data.faqs,
+        data.website_link,
+    )
+    row.contact_phone = _clean_phone(data.contact_phone) or _first_phone(
+        data.about_company,
+        data.policies,
+        data.faqs,
+    )
     row.about_company = (data.about_company or "").strip() or None
     row.target_demographics = (data.target_demographics or "").strip() or None
     row.logo = (data.logo or "").strip() or None
@@ -85,11 +114,14 @@ def knowledge_context(db: Session, message: str = "", tenant_id: str = DEFAULT_T
 
     message_lower = (message or "").lower()
     parts = []
+    contact_lines = _contact_context_lines(row)
     if row.company_name or row.industry:
         parts.append(
             "Business: "
             + ", ".join(filter(None, [row.company_name, row.industry, row.website_link]))
         )
+    if contact_lines and any(term in message_lower for term in CONTACT_QUERY_TERMS):
+        parts.append("Contact details: " + "; ".join(contact_lines))
     if row.about_company:
         parts.append(f"About company: {row.about_company}")
     if row.target_demographics:
@@ -106,8 +138,33 @@ def knowledge_context(db: Session, message: str = "", tenant_id: str = DEFAULT_T
         parts.append(f"Policies: {row.policies[:1200]}")
     if row.faqs and "FAQs:" not in "\n".join(parts):
         parts.append(f"FAQs: {row.faqs[:1200]}")
+    if contact_lines and "Contact details:" not in "\n".join(parts):
+        parts.append("Contact details: " + "; ".join(contact_lines))
 
     return "\n".join(parts)[:5000]
+
+
+def business_contact_details(db: Session, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
+    tenant_id = normalize_tenant_id(tenant_id)
+    row = db.execute(
+        select(KnowledgeBase).where(KnowledgeBase.tenant_id == tenant_id)
+    ).scalars().first()
+    if not row:
+        return {"email": None, "phone": None}
+
+    email = _clean_email(row.contact_email) or _first_email(
+        row.about_company,
+        row.policies,
+        row.faqs,
+        row.socials,
+    )
+    phone = _clean_phone(row.contact_phone) or _first_phone(
+        row.about_company,
+        row.policies,
+        row.faqs,
+        row.socials,
+    )
+    return {"email": email, "phone": phone}
 
 
 def _clean_knowledge_text(text: str | None, *, kind: str = "text") -> str | None:
@@ -174,6 +231,55 @@ def _clean_knowledge_text(text: str | None, *, kind: str = "text") -> str | None
     if kind == "policies":
         cleaned = _prioritize_policy_sections(cleaned)
     return cleaned or None
+
+
+def _clean_email(value: str | None) -> str | None:
+    text = str(value or "").strip().strip("_*`.,;:()[]{}<>")
+    match = EMAIL_RE.search(text)
+    if not match:
+        return None
+    return match.group(0).strip("_*`.,;:()[]{}<>")
+
+
+def _clean_phone(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    match = PHONE_RE.search(text)
+    if not match:
+        return None
+    return re.sub(r"\s+", " ", match.group(0)).strip()
+
+
+def _first_email(*values: object) -> str | None:
+    for value in values:
+        email = _clean_email(str(value or ""))
+        if email:
+            return email
+    return None
+
+
+def _first_phone(*values: object) -> str | None:
+    for value in values:
+        phone = _clean_phone(str(value or ""))
+        if phone:
+            return phone
+    return None
+
+
+def _contact_context_lines(row: KnowledgeBase) -> list[str]:
+    details = business_contact_details_from_row(row)
+    lines = []
+    if details.get("email"):
+        lines.append(f"support email={details['email']}")
+    if details.get("phone"):
+        lines.append(f"support phone={details['phone']}")
+    return lines
+
+
+def business_contact_details_from_row(row: KnowledgeBase) -> dict:
+    return {
+        "email": _clean_email(row.contact_email) or _first_email(row.about_company, row.policies, row.faqs, row.socials),
+        "phone": _clean_phone(row.contact_phone) or _first_phone(row.about_company, row.policies, row.faqs, row.socials),
+    }
 
 
 def _prioritize_policy_sections(text: str) -> str:

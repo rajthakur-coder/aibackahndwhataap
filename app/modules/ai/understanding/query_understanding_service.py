@@ -16,6 +16,7 @@ FAST_RULE_INTENTS = {
     "catalog_request",
     "image_request",
     "price_question",
+    "contact_request",
     "policy_question",
     "faq_question",
     "out_of_scope",
@@ -30,6 +31,7 @@ TOOL_BY_INTENT = {
     "catalog_request": "search_products",
     "image_request": "search_products",
     "price_question": "search_products",
+    "contact_request": "get_policy_or_faq",
     "policy_question": "get_policy_or_faq",
     "faq_question": "get_policy_or_faq",
     "service_request": "get_services",
@@ -89,6 +91,18 @@ LOW_INFORMATION_TERMS = {
     "yoo",
 }
 
+CONTACT_TERMS = {
+    "call",
+    "contact",
+    "email",
+    "mail",
+    "mobile",
+    "number",
+    "phone",
+    "support",
+    "whatsapp",
+}
+
 COMMON_FIXES = {
     "iamge": "image",
     "imgae": "image",
@@ -140,7 +154,7 @@ def _llm_understanding(message: str) -> QueryUnderstanding | None:
                         "Fix typos and Hinglish, but keep product names and order IDs intact. "
                         "Return only JSON with keys: normalized_query, intent, entities, "
                         "confidence, tool. Allowed intents: greeting, menu_request, order_status, top_selling_products, "
-                        "catalog_request, image_request, price_question, policy_question, "
+                        "catalog_request, image_request, price_question, contact_request, policy_question, "
                         "faq_question, service_request, general. Allowed tools: get_order_status, "
                         "search_products, get_customer_profile, get_policy_or_faq, get_services, "
                         "search_knowledge, general_reply. For product searches, entities may include "
@@ -191,7 +205,9 @@ def _rule_understanding(message: str) -> QueryUnderstanding:
 
     query_intent = detect_query_intent(normalized)
     intent = query_intent.name
-    if _looks_like_greeting_or_menu(normalized):
+    if _looks_like_contact_request(normalized):
+        intent = "contact_request"
+    elif _looks_like_greeting_or_menu(normalized):
         intent = "menu_request"
     elif _bare_order_id(normalized):
         intent = "order_status"
@@ -205,8 +221,11 @@ def _rule_understanding(message: str) -> QueryUnderstanding:
         confidence = max(confidence, 0.75)
     elif intent in FAST_RULE_INTENTS and query_intent.score >= 2:
         confidence = max(confidence, 0.65)
-    elif intent in {"catalog_request", "image_request", "price_question", "policy_question"} and query_intent.score >= 1:
+    elif intent in {"catalog_request", "image_request", "price_question", "contact_request", "policy_question"} and query_intent.score >= 1:
         confidence = max(confidence, 0.55)
+
+    if intent == "contact_request":
+        confidence = 0.95
 
     return QueryUnderstanding(
         original_message=message,
@@ -246,6 +265,43 @@ def _looks_like_greeting_or_menu(message: str) -> bool:
         intent_words = {"order", "track", "product", "products", "catalog", "price", "image", "status"}
         return not bool(set(tokens[1:]) & intent_words)
     return False
+
+
+def _looks_like_contact_request(message: str) -> bool:
+    tokens = {
+        re.sub(r"[^a-zA-Z0-9]", "", token).lower()
+        for token in re.findall(r"[a-zA-Z0-9]+", message or "")
+    }
+    tokens.discard("")
+    lowered = (message or "").lower()
+    if not tokens & CONTACT_TERMS:
+        return False
+    request_terms = {
+        "bata",
+        "batao",
+        "chahiye",
+        "chaiye",
+        "de",
+        "do",
+        "give",
+        "kya",
+        "share",
+        "send",
+    }
+    return bool(tokens & request_terms) or any(
+        phrase in lowered
+        for phrase in (
+            "contact us",
+            "customer care",
+            "support team",
+            "support number",
+            "email id",
+            "mail id",
+            "phone number",
+            "mobile number",
+            "whatsapp number",
+        )
+    )
 
 
 def _looks_out_of_scope(message: str) -> bool:

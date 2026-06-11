@@ -30,7 +30,7 @@ from app.modules.ecommerce.shipping import fetch_courier_tracking
 from app.modules.integrations.notification_service import notify_bulk_lead, notify_support_ticket
 from app.modules.headless.custom_tool_service import execute_custom_tool, get_custom_tool
 from app.modules.headless.oms_adapter import oms_adapter_registry
-from app.modules.knowledge.knowledge_service import knowledge_context
+from app.modules.knowledge.knowledge_service import business_contact_details, knowledge_context
 from app.shared.tenant import DEFAULT_TENANT_ID, normalize_tenant_id
 
 
@@ -275,15 +275,42 @@ def _get_policy(
     tenant_id: str,
 ) -> ToolCallResult:
     topic = str(entities.get("topic") or entities.get("policy_type") or message or "").strip()
+    contact_requested = _looks_like_contact_request(topic or message)
     context = knowledge_context(db, topic or message, tenant_id=tenant_id)
+    contact_details = business_contact_details(db, tenant_id=tenant_id)
     if not context:
         return ToolCallResult(
             "get_policy",
             "not_found",
             "I do not have that policy information yet.",
-            {"topic": topic},
+            {"topic": topic, "contact_details": contact_details, "contact_requested": contact_requested},
         )
-    return ToolCallResult("get_policy", "success", "Found matching policy or FAQ context.", {"context": context})
+    return ToolCallResult(
+        "get_policy",
+        "success",
+        "Found matching policy, FAQ, or contact context.",
+        {"context": context, "contact_details": contact_details, "contact_requested": contact_requested},
+    )
+
+
+def _looks_like_contact_request(message: str) -> bool:
+    lowered = (message or "").lower()
+    return any(
+        term in lowered
+        for term in (
+            "contact",
+            "email",
+            "e-mail",
+            "mail id",
+            "mobile",
+            "phone",
+            "number",
+            "call",
+            "whatsapp",
+            "support number",
+            "support email",
+        )
+    )
 
 
 def _get_bundle_recommendations(

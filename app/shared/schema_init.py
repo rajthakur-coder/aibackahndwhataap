@@ -191,6 +191,10 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     "contact_store_mappings": {
         "last_seen_at": "TIMESTAMP",
     },
+    "knowledge_bases": {
+        "contact_email": "VARCHAR",
+        "contact_phone": "VARCHAR",
+    },
 }
 
 

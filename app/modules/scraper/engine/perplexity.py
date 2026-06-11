@@ -33,6 +33,8 @@ def get_brand_intelligence(url: str) -> Dict[str, Any]:
     schema_structure = {
         "company_name": "Official name of the brand",
         "industry": "Specific industry category",
+        "contact_email": "Official customer support/contact email from the website, or empty string.",
+        "contact_phone": "Official customer support/contact phone/mobile/WhatsApp number from the website, or empty string.",
         "about_company": "Professional summary (80-120 words).",
         "target_demographics": "Description of the target audience.",
         "policies": "Return, exchange, refund, shipping, cancellation, COD, and warranty policy details found on official pages. Include exact days, conditions, exclusions, charges, and timelines when available.",
@@ -71,7 +73,7 @@ def get_brand_intelligence(url: str) -> Dict[str, Any]:
 
     user_prompt = (
         f"Perform a deep search and analyze the brand at this URL: {url}. "
-        "Extract official social media links, 5 competitors, customer policies, and FAQ/help content."
+        "Extract official social media links, official customer contact email/phone, 5 competitors, customer policies, and FAQ/help content."
     )
 
     payload = {

@@ -60,7 +60,7 @@ def orchestrate_message(
         tenant_id=tenant_id,
     )
 
-    deterministic_reply = _deterministic_reply(tool_result)
+    deterministic_reply = _deterministic_reply(tool_result, understanding.normalized_query or message)
     if deterministic_reply:
         reply = deterministic_reply
         return OrchestratorResponse(
@@ -132,7 +132,7 @@ def _select_tool(tool_name: str, intent: str, confidence: float, message: str = 
         return "search_catalog"
     if intent in {"order_status", "tracking_question"}:
         return "get_order_status"
-    if intent in {"policy_question", "faq_question"}:
+    if intent in {"contact_request", "policy_question", "faq_question"}:
         return "get_policy"
     return normalize_tool_name(tool_name)
 
@@ -200,7 +200,9 @@ def _out_of_scope_reply(db: Session | None, tenant_id: str) -> str:
     return "I can help with products, orders, delivery, returns, and support only."
 
 
-def _deterministic_reply(tool_result: ToolCallResult) -> str | None:
+def _deterministic_reply(tool_result: ToolCallResult, message: str = "") -> str | None:
+    if tool_result.tool_name == "get_policy" and isinstance(tool_result.data, dict) and tool_result.data.get("contact_requested"):
+        return _contact_details_sentence(tool_result.data.get("contact_details") or {}, message)
     if tool_result.tool_name != "get_order_status" or tool_result.status != "success":
         return None
     if not isinstance(tool_result.data, dict):
@@ -217,6 +219,25 @@ def _deterministic_reply(tool_result: ToolCallResult) -> str | None:
     if total:
         parts.append(f"Total: {total}{f' {currency}' if currency else ''}")
     return " ".join(parts).strip()
+
+
+def _contact_details_sentence(details: dict, message: str = "") -> str:
+    email = str(details.get("email") or "").strip()
+    phone = str(details.get("phone") or "").strip()
+    normalized = (message or "").lower()
+    wants_phone = any(term in normalized for term in ("mobile", "phone", "number", "contact number", "call", "whatsapp"))
+    wants_email = any(term in normalized for term in ("email", "mail", "email id", "emailid"))
+    if email and phone:
+        return f"You can contact us at {email} or call/WhatsApp {phone}."
+    if wants_phone and not phone and email:
+        return f"I do not have a customer care mobile number saved for this business yet. You can contact us at {email}."
+    if wants_email and not email and phone:
+        return f"I do not have a customer care email saved for this business yet. You can call or WhatsApp us at {phone}."
+    if email:
+        return f"You can contact us at {email}."
+    if phone:
+        return f"You can call or WhatsApp us at {phone}."
+    return "I do not have a customer care email or mobile number saved for this business yet."
 
 
 def _order_status_sentence(data: dict, order_number: str) -> str:

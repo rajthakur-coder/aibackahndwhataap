@@ -19,6 +19,9 @@ from .scraper_schema import (
 
 logger = logging.getLogger(__name__)
 
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+PHONE_RE = re.compile(r"(?:\+?91[\s-]?)?[6-9]\d{9}\b")
+
 
 def _extract_social_fields(social: Any) -> tuple[str | None, str | None]:
     if isinstance(social, str):
@@ -103,6 +106,27 @@ def _normalize_competitors(intelligence: dict) -> list[ScraperCompetitorOut]:
     return output
 
 
+def _clean_email(value: object) -> str | None:
+    text = str(value or "").strip().strip("_*`.,;:()[]{}<>")
+    match = EMAIL_RE.search(text)
+    return match.group(0).strip("_*`.,;:()[]{}<>") if match else None
+
+
+def _clean_phone(value: object) -> str | None:
+    text = str(value or "").strip()
+    match = PHONE_RE.search(text)
+    return re.sub(r"\s+", " ", match.group(0)).strip() if match else None
+
+
+def _first_contact(kind: str, *values: object) -> str | None:
+    cleaner = _clean_email if kind == "email" else _clean_phone
+    for value in values:
+        cleaned = cleaner(value)
+        if cleaned:
+            return cleaned
+    return None
+
+
 async def run_brand_scraper(payload: ScraperInput) -> ScraperResponse:
     target_url = str(payload.website_link)
     logger.info("Starting brand scrape for: %s", target_url)
@@ -132,6 +156,26 @@ async def run_brand_scraper(payload: ScraperInput) -> ScraperResponse:
         data=ScraperResultOut(
             company_name=intelligence.get("company_name") or assets.get("company_name"),
             industry=intelligence.get("industry"),
+            contact_email=_first_contact(
+                "email",
+                intelligence.get("contact_email"),
+                assets.get("contact_email"),
+                intelligence.get("about_company"),
+                intelligence.get("policies"),
+                intelligence.get("faqs"),
+                assets.get("policies"),
+                assets.get("faqs"),
+            ),
+            contact_phone=_first_contact(
+                "phone",
+                intelligence.get("contact_phone"),
+                assets.get("contact_phone"),
+                intelligence.get("about_company"),
+                intelligence.get("policies"),
+                intelligence.get("faqs"),
+                assets.get("policies"),
+                assets.get("faqs"),
+            ),
             about_company=intelligence.get("about_company") or "",
             website_link=target_url,
             logo=assets.get("logo"),
