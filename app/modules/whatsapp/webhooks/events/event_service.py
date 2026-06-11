@@ -42,9 +42,8 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
             display_phone_number = metadata.get("display_phone_number")
             for message in value.get("messages", []):
                 message_id = message.get("id")
-                text = message.get("text", {}).get("body")
-                if not text and message.get("type") == "image":
-                    text = message.get("image", {}).get("caption") or "[image]"
+                message_type = str(message.get("type") or "text")
+                text = _message_text(message)
                 phone = message.get("from")
                 interactive = message.get("interactive") or {}
                 list_reply = interactive.get("list_reply") if interactive.get("type") == "list_reply" else None
@@ -86,6 +85,7 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
                             "id": message_id,
                             "phone": phone,
                             "text": text,
+                            "message_type": message_type,
                             "payload": message,
                             "phone_number_id": phone_number_id,
                             "display_phone_number": display_phone_number,
@@ -94,6 +94,36 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
                     )
 
     return parsed_messages
+
+
+def _message_text(message: dict) -> str | None:
+    message_type = str(message.get("type") or "text")
+    text = message.get("text", {}).get("body")
+    if text:
+        return text
+
+    if message_type in {"image", "video"}:
+        media = message.get(message_type) or {}
+        return media.get("caption") or f"[{message_type}]"
+
+    if message_type == "document":
+        document = message.get("document") or {}
+        return document.get("caption") or document.get("filename") or "[document]"
+
+    if message_type == "audio":
+        audio = message.get("audio") or {}
+        return "[voice]" if audio.get("voice") else "[audio]"
+
+    if message_type == "sticker":
+        return "[sticker]"
+
+    if message_type == "location":
+        return "[location]"
+
+    if message_type == "contacts":
+        return "[contact]"
+
+    return text
 
 
 def get_or_create_webhook_event(

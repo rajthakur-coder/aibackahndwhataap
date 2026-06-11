@@ -203,6 +203,22 @@ async def _send_shop_list(context: WebhookProcessingContext) -> bool:
         context.reply_language,
         timing=context.timing,
     ):
+        save_message(
+            context.db,
+            context.phone,
+            "[list] Catalog categories",
+            "outgoing",
+            message_type="list",
+            payload={
+                "title": "Catalog",
+                "body": _flow_text(
+                    context,
+                    "catalog_category_prompt",
+                    "Which category would you like to view?",
+                ),
+                "button_text": "Categories",
+            },
+        )
         return True
 
     await _send_text(

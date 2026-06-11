@@ -93,12 +93,14 @@ async def _persist_incoming_message(
         with timing.stage("message_save_incoming"):
             display_text = _incoming_display_text(event, text)
             incoming_payload = _incoming_message_payload(db, phone, event, text, display_text)
+            message_type = _incoming_message_type(event)
             incoming_row = save_message(
                 db,
                 phone,
                 display_text,
                 "incoming",
                 whatsapp_message_id=event.external_id,
+                message_type=message_type,
                 payload=incoming_payload,
                 tenant_id=event.tenant_id,
             )
@@ -158,11 +160,59 @@ def _incoming_message_payload(
     if display_text != raw_text:
         payload["raw_text"] = raw_text
 
+    message_payload = _event_message_payload(event)
+    media_payload = _incoming_media_payload(message_payload)
+    if media_payload:
+        payload.update(media_payload)
+
     reply_context = _latest_interactive_reply_context(db, phone, event.tenant_id)
     if reply_context:
         payload["reply_context"] = reply_context
 
     return payload or None
+
+
+def _incoming_message_type(event: WebhookEvent) -> str:
+    message_payload = _event_message_payload(event)
+    return str(message_payload.get("type") or "text")
+
+
+def _event_message_payload(event: WebhookEvent) -> dict:
+    try:
+        payload = json.loads(event.payload or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+
+    message_payload = payload.get("message") if isinstance(payload, dict) else None
+    if isinstance(message_payload, dict):
+        return message_payload
+    return payload if isinstance(payload, dict) else {}
+
+
+def _incoming_media_payload(message_payload: dict) -> dict | None:
+    message_type = str(message_payload.get("type") or "")
+    if message_type not in {"image", "video", "audio", "document", "sticker"}:
+        return None
+
+    media = message_payload.get(message_type)
+    if not isinstance(media, dict):
+        return None
+
+    media_id = str(media.get("id") or "").strip()
+    media_url = f"/whatsapp-message/media/{media_id}" if media_id else None
+    payload: dict = {
+        "media": media,
+        "media_id": media_id or None,
+        "mime_type": media.get("mime_type"),
+        "caption": media.get("caption"),
+        "filename": media.get("filename"),
+        "voice": media.get("voice"),
+    }
+    if media_url:
+        payload["media_url"] = media_url
+        payload[f"{message_type}_url"] = media_url
+
+    return {key: value for key, value in payload.items() if value not in (None, "")}
 
 
 def _latest_interactive_reply_context(db: Session, phone: str, tenant_id: str | None = None) -> dict | None:

@@ -1,5 +1,5 @@
 import requests
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
@@ -20,7 +20,9 @@ from app.modules.whatsapp.live_chat.live_chat_service import (
     update_contact_status,
     upsert_manual_contact,
 )
+from app.config import settings
 from app.modules.whatsapp.live_chat.socket import live_chat_manager, publish_live_chat_event
+from app.modules.whatsapp.setup.setup_service import whatsapp_access_token
 from app.modules.whatsapp.templates import template_service
 from app.modules.whatsapp.whatsapp_schema import (
     SendMessageRequest,
@@ -198,6 +200,13 @@ async def remove_whatsapp_tag(request: Request, db: AsyncSession = Depends(get_d
 async def get_live_chat_messages(contact: str, db: AsyncSession = Depends(get_db)):
     return await db.run_sync(lambda sync_db: get_chat_messages(sync_db, contact))
 
+@router.get("/whatsapp-message/media/{media_id}")
+async def get_live_chat_media(media_id: str, db: AsyncSession = Depends(get_db)):
+    tenant_id = _current_request_tenant_id()
+    return await db.run_sync(
+        lambda sync_db: _download_whatsapp_media(sync_db, media_id=media_id, tenant_id=tenant_id)
+    )
+
 @router.post("/whatsapp-message/send-media")
 async def send_live_chat_message(request: Request, db: AsyncSession = Depends(get_db)):
     try:
@@ -272,5 +281,54 @@ async def mark_live_chat_message_read(request: Request, db: AsyncSession = Depen
             message_id=str(message_id) if message_id else None,
             contact=str(contact) if contact else None,
         )
+    )
+
+
+def _download_whatsapp_media(sync_db, *, media_id: str, tenant_id: str) -> Response:
+    media_id = str(media_id or "").strip()
+    if not media_id:
+        raise HTTPException(status_code=400, detail="media_id is required")
+
+    credential = get_whatsapp_credential(sync_db, tenant_id=tenant_id)
+    token = whatsapp_access_token(credential)
+    if not token:
+        raise HTTPException(status_code=400, detail="WhatsApp credentials are not configured")
+
+    try:
+        metadata_response = requests.get(
+            f"{settings.WHATSAPP_BASE_URL}/{media_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=20,
+        )
+        metadata_response.raise_for_status()
+        metadata = metadata_response.json()
+        media_url = metadata.get("url")
+        if not media_url:
+            raise HTTPException(status_code=404, detail="Media URL not found")
+
+        media_response = requests.get(
+            media_url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=60,
+        )
+        media_response.raise_for_status()
+    except HTTPException:
+        raise
+    except requests.RequestException as exc:
+        detail = exc.response.text if exc.response is not None else str(exc)
+        raise HTTPException(status_code=502, detail=detail) from exc
+
+    content_type = (
+        media_response.headers.get("Content-Type")
+        or metadata.get("mime_type")
+        or "application/octet-stream"
+    )
+    return Response(
+        content=media_response.content,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "Content-Disposition": "inline",
+        },
     )
 
