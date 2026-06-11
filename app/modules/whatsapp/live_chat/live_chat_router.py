@@ -20,7 +20,7 @@ from app.modules.whatsapp.live_chat.live_chat_service import (
     update_contact_status,
     upsert_manual_contact,
 )
-from app.modules.whatsapp.live_chat.socket import live_chat_manager
+from app.modules.whatsapp.live_chat.socket import live_chat_manager, publish_live_chat_event
 from app.modules.whatsapp.templates import template_service
 from app.modules.whatsapp.whatsapp_schema import (
     SendMessageRequest,
@@ -218,7 +218,7 @@ async def send_live_chat_message(request: Request, db: AsyncSession = Depends(ge
                 message_body=message_body,
             )
         )
-        await live_chat_manager.broadcast(
+        await publish_live_chat_event(
             {
                 "type": "live_chat_message",
                 "direction": "out",
@@ -246,7 +246,7 @@ async def send_live_chat_template(request: Request, db: AsyncSession = Depends(g
         )
     )
     if result.get("success"):
-        await live_chat_manager.broadcast(
+        await publish_live_chat_event(
             {
                 "type": "live_chat_message",
                 "direction": "out",

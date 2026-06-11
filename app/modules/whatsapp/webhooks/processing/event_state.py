@@ -18,7 +18,7 @@ from app.modules.ai.tools.ai_tools_service import ToolDecision, decide_tool_for_
 from app.modules.crm.memory.conversation_memory_service import remember_last_products
 from app.modules.whatsapp.messages.messages_service import save_message
 from app.modules.whatsapp.live_chat.live_chat_service import serialize_message
-from app.modules.whatsapp.live_chat.socket import live_chat_manager
+from app.modules.whatsapp.live_chat.socket import publish_live_chat_event
 from app.modules.whatsapp.analytics.analytics_service import tracking_url
 from app.modules.whatsapp.webhooks.tasks.background_service import (
     start_log_interactive_click,
@@ -103,7 +103,7 @@ async def _persist_incoming_message(
                 tenant_id=event.tenant_id,
             )
         with timing.stage("live_chat_broadcast"):
-            await live_chat_manager.broadcast(
+            await publish_live_chat_event(
                 {
                     "type": "live_chat_message",
                     "direction": "in",

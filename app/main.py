@@ -29,6 +29,7 @@ from app.modules.tenants.agency_router import agency_router
 from app.modules.v1.v1_router import internal_router, v1_router
 from app.modules.whatsapp.analytics.analytics_router import whatsapp_analytics_router
 from app.modules.whatsapp.live_chat.live_chat_router import websocket_router as whatsapp_live_chat_websocket_router
+from app.modules.whatsapp.live_chat.socket import live_chat_pubsub_loop
 from app.modules.whatsapp.whatsapp_router import whatsapp_router
 from app.modules.whatsapp.webhooks.routing.webhook_router import whatsapp_webhook_router
 from app.shared.arq_queue import close_arq_pools
@@ -68,11 +69,16 @@ async def startup():
         app.state.ecommerce_auto_sync_task = asyncio.create_task(
             ecommerce_auto_sync_loop()
         )
+    app.state.live_chat_pubsub_task = asyncio.create_task(live_chat_pubsub_loop())
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    for task_name in ("automation_processor_task", "ecommerce_auto_sync_task"):
+    for task_name in (
+        "automation_processor_task",
+        "ecommerce_auto_sync_task",
+        "live_chat_pubsub_task",
+    ):
         task = getattr(app.state, task_name, None)
         if task is not None:
             task.cancel()
