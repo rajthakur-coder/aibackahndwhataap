@@ -251,14 +251,34 @@ def _latest_interactive_reply_context(db: Session, phone: str, tenant_id: str | 
                 Message.tenant_id == tenant_id,
                 Message.phone == phone,
                 Message.direction == "outgoing",
-                Message.message_type.in_(["buttons", "list"]),
+                Message.message_type.in_(["buttons", "list", "interactive"]),
                 Message.payload.is_not(None),
             )
             .order_by(Message.created_at.desc(), Message.id.desc())
             .limit(1)
         ).scalars().first()
 
-    return _interactive_reply_context_from_message(row)
+    reply_context = _interactive_reply_context_from_message(row)
+    if reply_context:
+        return reply_context
+
+    if _is_interactive_reply_payload(message_payload):
+        row = db.execute(
+            select(Message)
+            .where(
+                Message.tenant_id == tenant_id,
+                Message.phone == phone,
+                Message.direction == "outgoing",
+                Message.payload.is_not(None),
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        ).scalars().first()
+        reply_context = _interactive_reply_context_from_message(row)
+        if reply_context:
+            return reply_context
+
+    return None
 
 
 
@@ -268,6 +288,12 @@ def _quoted_message_id(message_payload: dict) -> str | None:
         return None
     quoted_id = str(context.get("id") or "").strip()
     return quoted_id or None
+
+def _is_interactive_reply_payload(message_payload: dict | None) -> bool:
+    interactive = message_payload.get("interactive") if isinstance(message_payload, dict) else None
+    if not isinstance(interactive, dict):
+        return False
+    return str(interactive.get("type") or "") in {"button_reply", "list_reply"}
 
 
 def _interactive_reply_context_from_message(row: Message | None) -> dict | None:
