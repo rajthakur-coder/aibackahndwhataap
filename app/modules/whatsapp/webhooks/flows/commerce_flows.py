@@ -692,7 +692,7 @@ async def send_bundle_push(context: WebhookProcessingContext, products: list[dic
 
 
 def _is_shop_request(text: str) -> bool:
-    return text in {"shop / browse", "shop", "browse", "view catalog", "show catalog", "menu:catalog"} or text.startswith("shop:")
+    return text in {"shop / browse", "shop", "browse", "view catalog", "menu:catalog"} or text.startswith("shop:")
 
 
 def _is_track_request(text: str) -> bool:
