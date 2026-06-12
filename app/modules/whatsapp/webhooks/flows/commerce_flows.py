@@ -152,12 +152,14 @@ async def _send_welcome(context: WebhookProcessingContext) -> bool:
     )
     buttons = main_menu_buttons(context.bot_settings)
     try:
-        await run_in_threadpool(send_whatsapp_reply_buttons, context.phone, body, buttons, brand_name[:20])
+        response = await run_in_threadpool(send_whatsapp_reply_buttons, context.phone, body, buttons, brand_name[:20])
+        whatsapp_message_id = ((response or {}).get("messages") or [{}])[0].get("id")
         save_message(
             context.db,
             context.phone,
             "[buttons] Brand welcome",
             "outgoing",
+            whatsapp_message_id=whatsapp_message_id,
             message_type="buttons",
             payload={"title": "Brand welcome", "body": body, "buttons": buttons},
         )

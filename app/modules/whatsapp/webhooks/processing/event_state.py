@@ -165,7 +165,7 @@ def _incoming_message_payload(
     if media_payload:
         payload.update(media_payload)
 
-    reply_context = _latest_interactive_reply_context(db, phone, event.tenant_id)
+    reply_context = _latest_interactive_reply_context(db, phone, event.tenant_id, message_payload)
     if reply_context:
         payload["reply_context"] = reply_context
 
@@ -215,20 +215,62 @@ def _incoming_media_payload(message_payload: dict) -> dict | None:
     return {key: value for key, value in payload.items() if value not in (None, "")}
 
 
-def _latest_interactive_reply_context(db: Session, phone: str, tenant_id: str | None = None) -> dict | None:
+def _latest_interactive_reply_context(db: Session, phone: str, tenant_id: str | None = None, message_payload: dict | None = None) -> dict | None:
     tenant_id = normalize_tenant_id(tenant_id or DEFAULT_TENANT_ID)
-    row = db.execute(
-        select(Message)
-        .where(
-            Message.tenant_id == tenant_id,
-            Message.phone == phone,
-            Message.direction == "outgoing",
-            Message.message_type.in_(["buttons", "list"]),
-            Message.payload.is_not(None),
-        )
-        .order_by(Message.created_at.desc(), Message.id.desc())
-        .limit(1)
-    ).scalars().first()
+    quoted_message_id = _quoted_message_id(message_payload)
+
+    row = None
+    if quoted_message_id:
+        row = db.execute(
+            select(Message)
+            .where(
+                Message.tenant_id == tenant_id,
+                Message.phone == phone,
+                Message.direction == "outgoing",
+                Message.whatsapp_message_id == quoted_message_id,
+                Message.payload.is_not(None),
+            )
+            .limit(1)
+        ).scalars().first()
+
+    if quoted_message_id and row is None:
+        row = db.execute(
+            select(Message)
+            .where(
+                Message.direction == "outgoing",
+                Message.whatsapp_message_id == quoted_message_id,
+                Message.payload.is_not(None),
+            )
+            .limit(1)
+        ).scalars().first()
+
+    if row is None:
+        row = db.execute(
+            select(Message)
+            .where(
+                Message.tenant_id == tenant_id,
+                Message.phone == phone,
+                Message.direction == "outgoing",
+                Message.message_type.in_(["buttons", "list"]),
+                Message.payload.is_not(None),
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        ).scalars().first()
+
+    return _interactive_reply_context_from_message(row)
+
+
+
+def _quoted_message_id(message_payload: dict) -> str | None:
+    context = message_payload.get("context") if isinstance(message_payload, dict) else None
+    if not isinstance(context, dict):
+        return None
+    quoted_id = str(context.get("id") or "").strip()
+    return quoted_id or None
+
+
+def _interactive_reply_context_from_message(row: Message | None) -> dict | None:
     if not row or not row.payload:
         return None
 
