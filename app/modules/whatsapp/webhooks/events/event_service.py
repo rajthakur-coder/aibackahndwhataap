@@ -14,10 +14,68 @@ from app.modules.audit import write_audit_log
 from app.modules.whatsapp.webhooks.responses.response_service import CATALOG_CATEGORY_LABELS
 
 MAX_WEBHOOK_ATTEMPTS = 5
+RETURN_MENU_IDS = {
+    "return",
+    "returns",
+    "exchange",
+    "menu:return",
+    "menu:returns",
+    "menu:exchange",
+    "menu:return_exchange",
+    "menu:return-exchange",
+}
+RETURN_MENU_TITLES = {
+    "return",
+    "returns",
+    "exchange",
+    "return / exchange",
+    "return/exchange",
+    "return & exchange",
+    "returns / exchange",
+    "returns/exchange",
+}
+HUMAN_MENU_TITLES = {
+    "talk to human",
+    "talk to agent",
+    "human",
+    "agent",
+    "support",
+    "customer support",
+    "customer care",
+}
 
 
 class UnresolvedWebhookTenantError(ValueError):
     pass
+
+
+def _normalized_label(value: str | None) -> str:
+    return " ".join(str(value or "").lower().strip().split())
+
+
+def _is_return_menu_reply(reply_id: str | None, title: str | None) -> bool:
+    normalized_id = _normalized_label(reply_id)
+    normalized_title = _normalized_label(title)
+    return (
+        normalized_id in RETURN_MENU_IDS
+        or normalized_id.startswith("return:")
+        or normalized_id.startswith("confirm:return:")
+        or normalized_title in RETURN_MENU_TITLES
+    )
+
+
+def _is_human_menu_reply(reply_id: str | None, title: str | None) -> bool:
+    return (
+        _normalized_label(reply_id) == "menu:human"
+        or _normalized_label(title) in HUMAN_MENU_TITLES
+    )
+
+
+def _return_menu_text(reply_id: str | None) -> str:
+    reply_id_value = str(reply_id or "")
+    if reply_id_value.startswith("return:") or reply_id_value.startswith("confirm:return:"):
+        return reply_id_value
+    return "return / exchange"
 
 
 def verify_meta_webhook_signature(raw_body: bytes, signature_header: str | None) -> bool:
@@ -42,8 +100,9 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
             display_phone_number = metadata.get("display_phone_number")
             for message in value.get("messages", []):
                 message_id = message.get("id")
-                message_type = str(message.get("type") or "text")
-                text = _message_text(message)
+                text = message.get("text", {}).get("body")
+                if not text and message.get("type") == "image":
+                    text = message.get("image", {}).get("caption") or "[image]"
                 phone = message.get("from")
                 interactive = message.get("interactive") or {}
                 list_reply = interactive.get("list_reply") if interactive.get("type") == "list_reply" else None
@@ -57,12 +116,16 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
                         text = f"catalog dynamic category {reply_id.removeprefix('catalog:category:')} {title}".strip()
                     elif reply_id.startswith("catalog:"):
                         text = f"catalog category {reply_id.removeprefix('catalog:')} {title}".strip()
+                    elif _is_return_menu_reply(reply_id, title):
+                        text = _return_menu_text(reply_id)
                     else:
                         text = title or reply_id
                 elif button_reply:
                     reply_id = str(button_reply.get("id") or "")
                     title = str(button_reply.get("title") or "")
-                    if reply_id.startswith("catalog:more:"):
+                    if _is_return_menu_reply(reply_id, title):
+                        text = _return_menu_text(reply_id)
+                    elif reply_id.startswith("catalog:more:"):
                         parts = reply_id.split(":")
                         category = parts[2] if len(parts) > 2 else ""
                         page = parts[3] if len(parts) > 3 else "1"
@@ -74,7 +137,7 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
                         text = "show catalog"
                     elif reply_id == "menu:order_status":
                         text = "track order"
-                    elif reply_id == "menu:human":
+                    elif _is_human_menu_reply(reply_id, title):
                         text = "talk to human"
                     else:
                         text = title or reply_id
@@ -85,7 +148,6 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
                             "id": message_id,
                             "phone": phone,
                             "text": text,
-                            "message_type": message_type,
                             "payload": message,
                             "phone_number_id": phone_number_id,
                             "display_phone_number": display_phone_number,
@@ -94,36 +156,6 @@ def parse_whatsapp_messages(payload: dict) -> list[dict]:
                     )
 
     return parsed_messages
-
-
-def _message_text(message: dict) -> str | None:
-    message_type = str(message.get("type") or "text")
-    text = message.get("text", {}).get("body")
-    if text:
-        return text
-
-    if message_type in {"image", "video"}:
-        media = message.get(message_type) or {}
-        return media.get("caption") or f"[{message_type}]"
-
-    if message_type == "document":
-        document = message.get("document") or {}
-        return document.get("caption") or document.get("filename") or "[document]"
-
-    if message_type == "audio":
-        audio = message.get("audio") or {}
-        return "[voice]" if audio.get("voice") else "[audio]"
-
-    if message_type == "sticker":
-        return "[sticker]"
-
-    if message_type == "location":
-        return "[location]"
-
-    if message_type == "contacts":
-        return "[contact]"
-
-    return text
 
 
 def get_or_create_webhook_event(

@@ -74,12 +74,38 @@ CATALOG_PAGE_SIZE = 8
 MAIN_MENU_BUTTONS = [
     {"id": "menu:catalog", "title": "View catalog"},
     {"id": "menu:order_status", "title": "Track order"},
-    {"id": "menu:human", "title": "Talk to human"},
+    {"id": "return", "title": "Return / Exchange"},
 ]
 GREETING_TERMS = {"hi", "hello", "hey", "menu", "help", "start", "namaste", "hii"}
 
 
 from app.modules.whatsapp.webhooks.responses.intent_service import *
+
+RETURN_MENU_TITLES = {
+    "return",
+    "returns",
+    "exchange",
+    "return / exchange",
+    "return/exchange",
+    "return & exchange",
+    "returns / exchange",
+    "returns/exchange",
+}
+
+
+def _normalized_label(value: str | None) -> str:
+    return " ".join(str(value or "").lower().strip().split())
+
+
+def _normalize_menu_button(button: dict) -> dict:
+    button_id = str(button.get("id") or "").strip()
+    title = str(button.get("title") or "").strip()[:20]
+
+    if _normalized_label(title) in RETURN_MENU_TITLES:
+        button_id = "return"
+
+    return {"id": button_id, "title": title}
+
 
 def main_menu_buttons(bot_settings=None) -> list[dict]:
     try:
@@ -87,7 +113,7 @@ def main_menu_buttons(bot_settings=None) -> list[dict]:
     except json.JSONDecodeError:
         buttons = []
     clean_buttons = [
-        {"id": str(button.get("id") or "").strip(), "title": str(button.get("title") or "").strip()[:20]}
+        _normalize_menu_button(button)
         for button in buttons
         if isinstance(button, dict) and button.get("id") and button.get("title")
     ]

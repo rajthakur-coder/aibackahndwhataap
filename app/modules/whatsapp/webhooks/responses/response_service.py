@@ -74,7 +74,7 @@ CATALOG_PAGE_SIZE = 8
 MAIN_MENU_BUTTONS = [
     {"id": "menu:catalog", "title": "View catalog"},
     {"id": "menu:order_status", "title": "Track order"},
-    {"id": "menu:human", "title": "Talk to human"},
+    {"id": "return", "title": "Return / Exchange"},
 ]
 GREETING_TERMS = {"hi", "hello", "hey", "menu", "help", "start", "namaste", "hii"}
 
