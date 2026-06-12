@@ -233,10 +233,15 @@ def list_recent_orders_for_customer(
     tenant_id: str | None = None,
 ) -> list[EcommerceOrder]:
     tenant_id = tenant_id or _tenant_for_phone(db, phone)
+    limit = max(1, min(limit, 10))
     statement = select(EcommerceOrder).where(EcommerceOrder.phone == phone)
     if tenant_id:
         statement = statement.where(EcommerceOrder.tenant_id == tenant_id)
-    rows = db.execute(statement.order_by(EcommerceOrder.updated_at.desc()).limit(max(1, min(limit, 10)))).scalars().all()
+    rows = db.execute(statement.order_by(EcommerceOrder.updated_at.desc()).limit(limit)).scalars().all()
+    if rows:
+        return rows
+
+    rows = _recent_orders_by_normalized_phone(db, phone, limit=limit, tenant_id=tenant_id)
     if rows:
         return rows
 
@@ -244,7 +249,42 @@ def list_recent_orders_for_customer(
     statement = select(EcommerceOrder).where(EcommerceOrder.phone == phone)
     if tenant_id:
         statement = statement.where(EcommerceOrder.tenant_id == tenant_id)
-    return db.execute(statement.order_by(EcommerceOrder.updated_at.desc()).limit(max(1, min(limit, 10)))).scalars().all()
+    rows = db.execute(statement.order_by(EcommerceOrder.updated_at.desc()).limit(limit)).scalars().all()
+    if rows:
+        return rows
+    return _recent_orders_by_normalized_phone(db, phone, limit=limit, tenant_id=tenant_id)
+
+
+def _recent_orders_by_normalized_phone(
+    db: Session,
+    phone: str,
+    *,
+    limit: int,
+    tenant_id: str | None = None,
+) -> list[EcommerceOrder]:
+    normalized_phone = _digits(phone)
+    if not normalized_phone:
+        return []
+
+    statement = select(EcommerceOrder).where(EcommerceOrder.phone.is_not(None))
+    if tenant_id:
+        statement = statement.where(EcommerceOrder.tenant_id == tenant_id)
+    candidates = db.execute(
+        statement.order_by(EcommerceOrder.updated_at.desc()).limit(200)
+    ).scalars().all()
+
+    matches = [
+        order
+        for order in candidates
+        if _phone_digits_match(normalized_phone, _digits(order.phone))
+    ]
+    return matches[:limit]
+
+
+def _phone_digits_match(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    return left == right or left.endswith(right[-10:]) or right.endswith(left[-10:])
 
 
 def _find_live_order_for_customer(
